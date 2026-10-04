@@ -1,0 +1,45 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.env
+
+# Large input videos
+*.mp4
+*.avi
+*.mov
+*.mkv
+
+# Generated outputs
+output_*.json
+output_*.mp4
+*_test.json
+
+# Benchmarks / generated results
+benchmarks/*.csv
+
+# Model weights / OpenVINO binaries
+*.pt
+*.bin
+*.onnx
+*.trt
+
+# OpenVINO generated model directory
+yolov12n-face_openvino_model/
+
+# Old experiments / cloned repositories
+CenterFace/
+yolo-face/
+
+# IDE
+.vscode/
+.idea/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Old CenterFace models
+models/centerface/
+models/public/centerface/

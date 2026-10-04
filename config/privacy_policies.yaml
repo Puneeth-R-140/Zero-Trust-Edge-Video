@@ -1,0 +1,65 @@
+# ==============================================================================
+# Face Anonymization Privacy Policies Configuration
+# ==============================================================================
+# This configuration defines extensible privacy policies for Intel DL Streamer.
+# The policy layer maps policy names to inference parameters, ROI modification rules,
+# and downstream anonymization operations.
+#
+# Supported policies:
+#   - STANDARD: Standard privacy blur via DL Streamer gvawatermark
+#   - HIGH_PRIVACY: Strong blur with 25% expanded ROI coverage
+#   - ZERO_TRUST: Encrypted ROI pipeline representation (staged for future crypto module)
+# ==============================================================================
+
+version: "1.0"
+default_policy: "STANDARD"
+
+policies:
+  STANDARD:
+    description: "Standard privacy preservation using default DL Streamer Gaussian blur"
+    anonymization: "blur"
+    confidence: 0.5
+    inference_interval: 2
+    tracking_type: "short-term-imageless"
+    roi_padding: "0%"
+    target_labels:
+      - "face"
+    enabled: true
+
+  HIGH_PRIVACY:
+    description: "High privacy anonymization with expanded ROI padding for perimeter coverage"
+    anonymization: "strong_blur"
+    confidence: 0.5
+    inference_interval: 2
+    tracking_type: "short-term-imageless"
+    roi_padding: "25%"
+    target_labels:
+      - "face"
+    enabled: true
+
+  ZERO_TRUST:
+    description: "Cryptographic privacy protection staging (encryption module integration target)"
+    anonymization: "encryption"
+    confidence: 0.5
+    inference_interval: 2
+    tracking_type: "short-term-imageless"
+    roi_padding: "25%"
+    target_labels:
+      - "face"
+    enabled: false
+    notes: "Encryption anonymization backend scheduled for subsequent development phase."
+
+# Registry of supported anonymization methods and their DL Streamer handling strategy
+anonymization_methods:
+  blur:
+    handler: "dlstreamer_gvawatermark"
+    supported_in_pipeline: true
+    description: "Built-in DL Streamer gvawatermark OpenCV GaussianBlur"
+  strong_blur:
+    handler: "dlstreamer_gvawatermark_padded"
+    supported_in_pipeline: true
+    description: "Padded ROI blur with increased effective kernel size and perimeter coverage"
+  encryption:
+    handler: "roi_encryption_element"
+    supported_in_pipeline: false
+    description: "Future custom encrypted metadata / frame transform element"
