@@ -1,0 +1,90 @@
+{
+  "crowd_monitoring": {
+    "enabled": true,
+    "thresholds": {
+      "LOW": 2,
+      "NORMAL": 5,
+      "HIGH": 8
+    },
+    "alert_cooldown_seconds": 5.0
+  },
+  "restricted_zones": [
+    {
+      "zone_id": "zone_platform_restricted",
+      "name": "Platform Edge Restricted Zone",
+      "polygon": [
+        [
+          132,
+          737
+        ],
+        [
+          322,
+          737
+        ],
+        [
+          322,
+          846
+        ],
+        [
+          132,
+          846
+        ]
+      ],
+      "alert_type": "ZONE_INTRUSION",
+      "enabled": false
+    },
+    {
+      "zone_id": "zone_restricted_2",
+      "name": "Zone #2",
+      "polygon": [
+        [
+          450,
+          490
+        ],
+        [
+          684,
+          490
+        ],
+        [
+          684,
+          793
+        ],
+        [
+          450,
+          793
+        ]
+      ],
+      "alert_type": "ZONE_INTRUSION",
+      "enabled": false
+    }
+  ],
+  "virtual_tripwires": [
+    {
+      "tripwire_id": "tripwire_gate_01",
+      "name": "Main Concourse Tripwire",
+      "p1": [
+        100,
+        380
+      ],
+      "p2": [
+        1180,
+        380
+      ],
+      "direction_labels": {
+        "A_TO_B": "ENTRY",
+        "B_TO_A": "EXIT"
+      },
+      "enabled": true
+    }
+  ],
+  "bidirectional_counting": {
+    "enabled": true,
+    "initial_occupancy": 0,
+    "crossing_debounce_frames": 10
+  },
+  "event_emission": {
+    "emit_console": true,
+    "emit_json_file": true,
+    "output_file": "analytics_events.json"
+  }
+}

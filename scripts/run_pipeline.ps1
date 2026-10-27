@@ -1,28 +1,53 @@
 param(
     [string]$Policy = "STANDARD",
     [string]$InputType = "file", # "file" or "webcam"
-    [string]$InputVideo = "E:/projects/ZTE-1/video.mp4",
-    [string]$WebcamDevice = "", # Optional specific device-path or device-index
+    [string]$InputVideo = "",
+    [string]$WebcamDevice = "0", # Optional specific device-path or device-index
     [int]$WebcamWidth = 1280,
     [int]$WebcamHeight = 720,
     [int]$WebcamFps = 30,
     [int]$NumBuffers = -1, # -1 for unlimited stream, or positive integer for bounded testing
     [string]$Device = "GPU", # "GPU" or "CPU"
     [string]$OutputType = "display", # "display", "file", "fps", "json"
-    [string]$OutputFile = "E:/projects/ZTE-1/output_anonymized.mp4",
+    [string]$OutputFile = "",
     [int]$InferenceInterval = 0, # If 0, resolved from Policy
     [string]$TrackingType = "",  # If empty, resolved from Policy
     [double]$Threshold = 0.0,    # If 0.0, resolved from Policy
     [switch]$ShowLabels = $false,
     [switch]$BenchmarkSink = $false,
-    [string]$ConfigPath = "E:/projects/ZTE-1/config/privacy_policies.json"
+    [string]$ConfigPath = "",
+    [string]$Backend = "auto",   # "auto", "dlstreamer", "openvino"
+    [switch]$NoAnalytics = $false,
+    [string]$AnalyticsConfig = ""
 )
 
 $ErrorActionPreference = "Stop"
 
+# --- Resolve Project Root & Dynamic Defaults ---
+$ScriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
+if (-not $ScriptDir) { $ScriptDir = $PSScriptRoot }
+if (-not $ScriptDir) { $ScriptDir = (Get-Location).Path }
+$ProjectRoot = (Resolve-Path "$ScriptDir\..").Path
+if (-not $ProjectRoot) { $ProjectRoot = (Get-Location).Path }
+
+if ([string]::IsNullOrWhiteSpace($ConfigPath)) {
+    $ConfigPath = Join-Path $ProjectRoot "config\privacy_policies.json"
+}
+if ([string]::IsNullOrWhiteSpace($InputVideo)) {
+    $InputVideo = Join-Path $ProjectRoot "video.mp4"
+}
+if ([string]::IsNullOrWhiteSpace($OutputFile)) {
+    $OutputFile = Join-Path $ProjectRoot "output_anonymized.mp4"
+}
+$ModelXml = Join-Path $ProjectRoot "yolov12n-face_openvino_model\yolov12n-face.xml"
+
 # --- Policy Resolution Layer ---
 $ResolvedPolicy = $Policy.ToUpper()
-$PolicyJson = Get-Content -Raw -Path $ConfigPath | ConvertFrom-Json
+if (-not (Test-Path $ConfigPath)) {
+    Write-Error "Configuration file not found at: $ConfigPath"
+}
+
+$PolicyJson = (Get-Content -Path $ConfigPath -Raw) | ConvertFrom-Json
 
 if (-not $PolicyJson.policies.PSObject.Properties[$ResolvedPolicy]) {
     $Available = ($PolicyJson.policies.PSObject.Properties.Name) -join ", "
@@ -52,17 +77,16 @@ if (-not $IsSupportedInPipeline) {
 }
 
 # Resolve paths
-$ModelXml = "E:/projects/ZTE-1/yolov12n-face_openvino_model/yolov12n-face.xml"
 $InputPath = $InputVideo -replace '\\', '/'
 $OutputPath = $OutputFile -replace '\\', '/'
 $ModelPath = $ModelXml -replace '\\', '/'
 
 Write-Host "==========================================================" -ForegroundColor Cyan
-Write-Host "Intel DL Streamer Face Anonymization Pipeline" -ForegroundColor Green
+Write-Host "Intel DL Streamer / OpenVINO Face Anonymization Pipeline" -ForegroundColor Green
 Write-Host "==========================================================" -ForegroundColor Cyan
 Write-Host "Input Mode          : $($InputType.ToUpper())" -ForegroundColor Yellow
 if ($InputType.ToLower() -eq "webcam") {
-    Write-Host "Webcam Capture      : Windows Media Foundation (mfvideosrc)"
+    Write-Host "Webcam Device       : $WebcamDevice"
     Write-Host "Target Format       : ${WebcamWidth}x${WebcamHeight} @ ${WebcamFps}fps"
 } else {
     Write-Host "Input Source        : $InputPath"
@@ -77,6 +101,60 @@ Write-Host "Confidence Thresh   : $EffectiveThreshold"
 Write-Host "Output Mode         : $OutputType"
 Write-Host "==========================================================" -ForegroundColor Cyan
 
+# Check for GStreamer gst-launch-1.0
+$GstCmd = Get-Command "gst-launch-1.0" -ErrorAction SilentlyContinue
+
+$UseOpenVinoEngine = $false
+if ($Backend -eq "openvino") {
+    $UseOpenVinoEngine = $true
+} elseif ($Backend -eq "dlstreamer") {
+    if (-not $GstCmd) {
+        Write-Error "Backend 'dlstreamer' was specified, but 'gst-launch-1.0' was not found in PATH."
+    }
+} else {
+    # auto mode
+    if (-not $GstCmd) {
+        $UseOpenVinoEngine = $true
+        Write-Host "Note: GStreamer 'gst-launch-1.0' not detected in system PATH." -ForegroundColor Yellow
+        Write-Host "Automatically routing execution through Intel OpenVINO runtime engine..." -ForegroundColor Green
+    }
+}
+
+if ($UseOpenVinoEngine) {
+    $PyRunner = Join-Path $ScriptDir "run_pipeline.py"
+    $LabelsFlag = if ($ShowLabels) { "--show-labels" } else { "" }
+    $PyArgs = @(
+        "`"$PyRunner`"",
+        "--policy `"$ResolvedPolicy`"",
+        "--input-type `"$InputType`"",
+        "--input-video `"$InputPath`"",
+        "--webcam-device `"$WebcamDevice`"",
+        "--webcam-width $WebcamWidth",
+        "--webcam-height $WebcamHeight",
+        "--webcam-fps $WebcamFps",
+        "--num-buffers $NumBuffers",
+        "--device `"$Device`"",
+        "--output-type `"$OutputType`"",
+        "--output-file `"$OutputPath`"",
+        "--inference-interval $EffectiveInterval",
+        "--tracking-type `"$EffectiveTracking`"",
+        "--threshold $EffectiveThreshold",
+        "--config-path `"$ConfigPath`"",
+        "--model-path `"$ModelPath`""
+    )
+    if ($ShowLabels) { $PyArgs += "--show-labels" }
+    if ($NoAnalytics) { $PyArgs += "--no-analytics" }
+    if (-not [string]::IsNullOrWhiteSpace($AnalyticsConfig)) { $PyArgs += "--analytics-config `"$AnalyticsConfig`"" }
+
+    $PyCommand = "python $($PyArgs -join ' ')"
+    Write-Host "`nExecuting OpenVINO Pipeline Engine:" -ForegroundColor Yellow
+    Write-Host $PyCommand -ForegroundColor Gray
+    Write-Host ""
+    Invoke-Expression $PyCommand
+    exit $LASTEXITCODE
+}
+
+# --- DL Streamer GStreamer Pipeline Construction ---
 # Source element configuration
 $NormalizedInputType = $InputType.ToLower()
 if ($NormalizedInputType -eq "webcam") {
@@ -99,11 +177,7 @@ if ($Device -eq "GPU") {
     $TRACK_DEVICE = "device=CPU"
     $WATERMARK_PRE = "! d3d11convert"
     $WATERMARK_DEV = "device=CPU"
-    if ($NormalizedInputType -eq "webcam") {
-        $DECODE_STAGE = "decodebin3 ! d3d11upload ! `"video/x-raw(memory:D3D11Memory)`""
-    } else {
-        $DECODE_STAGE = "decodebin3 ! d3d11upload ! `"video/x-raw(memory:D3D11Memory)`""
-    }
+    $DECODE_STAGE = "decodebin3 ! d3d11upload ! `"video/x-raw(memory:D3D11Memory)`""
 } else {
     $PREPROC = "pre-process-backend=opencv"
     $TRACK_DEVICE = "device=CPU"
@@ -120,10 +194,10 @@ $DISPL_CFG = "displ-cfg=`"enable-blur=true,show-blur-roi=face,show-labels=$LABEL
 switch ($OutputType) {
     "display" {
         if ($Device -eq "GPU") {
-        $SINK = "$WATERMARK_PRE ! gvawatermark $WATERMARK_DEV $DISPL_CFG ! d3d11convert ! gvafpscounter ! d3d11videosink sync=false"
-    } else {
-        $SINK = "$WATERMARK_PRE ! gvawatermark $WATERMARK_DEV $DISPL_CFG ! videoconvert ! gvafpscounter ! autovideosink sync=false"
-    }
+            $SINK = "$WATERMARK_PRE ! gvawatermark $WATERMARK_DEV $DISPL_CFG ! d3d11convert ! gvafpscounter ! d3d11videosink sync=false"
+        } else {
+            $SINK = "$WATERMARK_PRE ! gvawatermark $WATERMARK_DEV $DISPL_CFG ! videoconvert ! gvafpscounter ! autovideosink sync=false"
+        }
     }
     "file" {
         $SINK = "$WATERMARK_PRE ! gvawatermark $WATERMARK_DEV $DISPL_CFG ! videoconvert ! gvafpscounter ! mfh264enc ! h264parse ! mp4mux ! filesink location=`"$OutputPath`""
@@ -142,7 +216,7 @@ switch ($OutputType) {
 
 $PIPELINE = "gst-launch-1.0 $SOURCE ! $DECODE_STAGE ! gvadetect model=`"$ModelPath`" device=$Device $PREPROC inference-interval=$EffectiveInterval threshold=$EffectiveThreshold ! gvatrack tracking-type=$EffectiveTracking $TRACK_DEVICE $SINK"
 
-Write-Host "`nExecuting Pipeline:" -ForegroundColor Yellow
+Write-Host "`nExecuting DL Streamer Pipeline:" -ForegroundColor Yellow
 Write-Host $PIPELINE -ForegroundColor Gray
 Write-Host ""
 

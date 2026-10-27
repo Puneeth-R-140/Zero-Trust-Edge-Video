@@ -23,15 +23,15 @@
       "enabled": true
     },
     "ZERO_TRUST": {
-      "description": "Cryptographic privacy protection staging (encryption module integration target)",
+      "description": "Reversible cryptographic privacy protection using authenticated AES-256-GCM ROI encryption with unique nonces and AAD binding",
       "anonymization": "encryption",
-      "confidence": 0.5,
+      "confidence": 0.35,
       "inference_interval": 2,
       "tracking_type": "short-term-imageless",
       "roi_padding": "25%",
       "target_labels": ["face"],
-      "enabled": false,
-      "notes": "Encryption anonymization backend scheduled for subsequent development phase."
+      "enabled": true,
+      "notes": "Full AES-256-GCM authenticated encryption active with secure key loading."
     }
   },
   "anonymization_methods": {
@@ -46,9 +46,9 @@
       "description": "Padded ROI blur with increased effective kernel size and perimeter coverage"
     },
     "encryption": {
-      "handler": "roi_encryption_element",
-      "supported_in_pipeline": false,
-      "description": "Future custom encrypted metadata / frame transform element"
+      "handler": "roi_encryptor_aes_256_gcm",
+      "supported_in_pipeline": true,
+      "description": "Authenticated AES-256-GCM symmetric encryption with unique 96-bit nonces, 128-bit tags, and AAD tamper prevention"
     }
   }
 }

@@ -1,8 +1,22 @@
 param(
-    [string]$InputVideo = "E:/projects/ZTE-1/video.mp4"
+    [string]$InputVideo = "",
+    [int]$NumBuffers = 60
 )
 
-$ModelXml = "E:/projects/ZTE-1/yolov12n-face_openvino_model/yolov12n-face.xml"
+$ErrorActionPreference = "Stop"
+
+$ScriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
+if (-not $ScriptDir) { $ScriptDir = $PSScriptRoot }
+if (-not $ScriptDir) { $ScriptDir = (Get-Location).Path }
+$ProjectRoot = (Resolve-Path "$ScriptDir\..").Path
+if (-not $ProjectRoot) { $ProjectRoot = (Get-Location).Path }
+
+if ([string]::IsNullOrWhiteSpace($InputVideo)) {
+    $InputVideo = Join-Path $ProjectRoot "video.mp4"
+}
+$ModelXml = Join-Path $ProjectRoot "yolov12n-face_openvino_model\yolov12n-face.xml"
+$ReportCsv = Join-Path $ProjectRoot "benchmarks\benchmark_results.csv"
+
 $InputPath = $InputVideo -replace '\\', '/'
 $Results = @()
 
@@ -18,38 +32,55 @@ $Configurations = @(
 )
 
 Write-Host "==========================================================" -ForegroundColor Cyan
-Write-Host "DL Streamer Face Anonymization - Automated Benchmark Suite" -ForegroundColor Green
+Write-Host "DL Streamer / OpenVINO Face Anonymization - Benchmark Suite" -ForegroundColor Green
 Write-Host "==========================================================" -ForegroundColor Cyan
+
+$GstCmd = Get-Command "gst-launch-1.0" -ErrorAction SilentlyContinue
 
 foreach ($cfg in $Configurations) {
     Write-Host "`nRunning Configuration: $($cfg.Name)..." -ForegroundColor Yellow
     
-    $pipe = "gst-launch-1.0 filesrc location=`"$InputPath`" ! decodebin3 ! gvadetect model=`"$ModelXml`" device=$($cfg.Device) pre-process-backend=$($cfg.Preproc) inference-interval=$($cfg.Interval)"
-    
-    if ($cfg.Track -ne "none") {
-        $pipe += " ! gvatrack tracking-type=$($cfg.Track) device=CPU"
-    }
-
-    if ($cfg.Blur) {
-        if ($cfg.Device -eq "GPU") {
-            $pipe += " ! d3d11convert"
+    if ($GstCmd) {
+        $pipe = "gst-launch-1.0 filesrc location=`"$InputPath`" ! decodebin3 ! gvadetect model=`"$ModelXml`" device=$($cfg.Device) pre-process-backend=$($cfg.Preproc) inference-interval=$($cfg.Interval)"
+        if ($cfg.Track -ne "none") {
+            $pipe += " ! gvatrack tracking-type=$($cfg.Track) device=CPU"
         }
-        $pipe += " ! gvawatermark device=CPU displ-cfg=`"enable-blur=true,show-blur-roi=face,show-labels=false`""
-    }
-    
-    $pipe += " ! gvafpscounter ! fakesink async=false"
-    
-    $startTime = [System.DateTime]::Now
-    $output = Invoke-Expression "$pipe 2>&1"
-    $endTime = [System.DateTime]::Now
-    $duration = ($endTime - $startTime).TotalSeconds
-    
-    # Parse FPS
-    $overallFps = "N/A"
-    $fpsLines = $output | Where-Object { $_ -match "FpsCounter\(overall" }
-    if ($fpsLines) {
-        $lastLine = $fpsLines[-1]
-        if ($lastLine -match "total=([0-9\.]+) fps") {
+        if ($cfg.Blur) {
+            if ($cfg.Device -eq "GPU") {
+                $pipe += " ! d3d11convert"
+            }
+            $pipe += " ! gvawatermark device=CPU displ-cfg=`"enable-blur=true,show-blur-roi=face,show-labels=false`""
+        }
+        $pipe += " ! gvafpscounter ! fakesink async=false"
+        
+        $startTime = [System.DateTime]::Now
+        $output = Invoke-Expression "$pipe 2>&1"
+        $endTime = [System.DateTime]::Now
+        $duration = ($endTime - $startTime).TotalSeconds
+        
+        $overallFps = "N/A"
+        $fpsLines = $output | Where-Object { $_ -match "FpsCounter\(overall" }
+        if ($fpsLines) {
+            $lastLine = $fpsLines[-1]
+            if ($lastLine -match "total=([0-9\.]+) fps") {
+                $overallFps = [double]$matches[1]
+            }
+        }
+    } else {
+        # Fallback to OpenVINO Python engine
+        $PyRunner = Join-Path $ProjectRoot "scripts\run_pipeline.py"
+        $PolicyName = if ($cfg.Blur) { "STANDARD" } else { "STANDARD" }
+        $TrackArg = if ($cfg.Track -ne "none") { "--tracking-type `"$($cfg.Track)`"" } else { "" }
+        $cmd = "python `"$PyRunner`" --input-video `"$InputPath`" --device $($cfg.Device) --inference-interval $($cfg.Interval) --num-buffers $NumBuffers --output-type fps $TrackArg"
+        
+        $startTime = [System.DateTime]::Now
+        $output = Invoke-Expression "$cmd 2>&1"
+        $endTime = [System.DateTime]::Now
+        $duration = ($endTime - $startTime).TotalSeconds
+        
+        $overallFps = "N/A"
+        $fpsLine = $output | Where-Object { $_ -match "Average Throughput:\s+([0-9\.]+)\s+FPS" }
+        if ($fpsLine -and ($fpsLine -match "([0-9\.]+)\s+FPS")) {
             $overallFps = [double]$matches[1]
         }
     }
@@ -72,6 +103,7 @@ Write-Host "Benchmark Summary:" -ForegroundColor Green
 Write-Host "==========================================================" -ForegroundColor Cyan
 $Results | Format-Table -AutoSize
 
-$ReportCsv = "E:/projects/ZTE-1/benchmarks/benchmark_results.csv"
+$ReportDir = Split-Path -Parent $ReportCsv
+if (-not (Test-Path $ReportDir)) { New-Item -ItemType Directory -Path $ReportDir -Force | Out-Null }
 $Results | Export-Csv -Path $ReportCsv -NoTypeInformation
 Write-Host "Benchmark results saved to: $ReportCsv" -ForegroundColor Cyan

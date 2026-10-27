@@ -5,16 +5,25 @@ __pycache__/
 venv/
 .env
 
+# Cryptographic keys and secrets
+.keys/
+*.key
+*.pem
+secrets/
+
 # Large input videos
 *.mp4
 *.avi
 *.mov
 *.mkv
+uploads/
 
 # Generated outputs
 output_*.json
 output_*.mp4
+output_stage_a/
 *_test.json
+analytics_events.json
 
 # Benchmarks / generated results
 benchmarks/*.csv
@@ -27,6 +36,7 @@ benchmarks/*.csv
 
 # OpenVINO generated model directory
 yolov12n-face_openvino_model/
+yolo11n_openvino_model/
 
 # Old experiments / cloned repositories
 CenterFace/

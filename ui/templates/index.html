@@ -1,0 +1,641 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Privacy-Preserving Face Anonymization | Intel DL Streamer Dashboard</title>
+  
+  <!-- Modern Clean Typography -->
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+  
+  <link rel="stylesheet" href="/static/css/style.css">
+</head>
+<body>
+
+  <!-- Top Navigation Header -->
+  <header class="app-header">
+    <div class="brand-section">
+      <div class="brand-mark">Z</div>
+      <div class="brand-text">
+        <h1>Zero-Trust Edge Video</h1>
+        <p>Privacy-Preserving Face Anonymization &bull; Intel DL Streamer</p>
+      </div>
+    </div>
+    
+    <div class="status-pill running" id="statusPill">
+      <div class="status-indicator"></div>
+      <span id="statusText">PIPELINE ACTIVE</span>
+    </div>
+  </header>
+
+  <!-- Main Dashboard View -->
+  <div class="dashboard-container">
+    
+    <!-- Left Column: Live Monitor, Status Strip, Activity Logs -->
+    <div class="left-col">
+      
+      <!-- Live Monitor Section -->
+      <section class="dash-card">
+        <div class="dash-card-header">
+          <div class="dash-card-title">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect width="20" height="14" x="2" y="3" rx="2"/><line x1="8" x2="16" y1="21" y2="21"/><line x1="12" x2="12" y1="17" y2="21"/></svg>
+            Live Monitor
+          </div>
+          <span style="font-size: 0.72rem; color: var(--text-muted); font-family: 'JetBrains Mono', monospace;">EDGE DEPLOYMENT</span>
+        </div>
+        
+        <div class="monitor-viewport" id="monitorViewport">
+          <div class="standby-screen" id="standbyScreen" style="display: none;">
+            <div class="standby-badge">STANDBY &bull; PIPELINE STOPPED</div>
+            <p class="standby-hint">Click &ldquo;Start Pipeline&rdquo; to begin real-time stream processing</p>
+          </div>
+          <img id="monitorFeed" class="monitor-img" src="/video_feed" alt="Pipeline Video Stream">
+          <canvas id="interactiveCanvas" class="interactive-canvas"></canvas>
+          <div id="drawBanner" class="draw-banner" style="display: none;">
+            <span id="drawBannerIcon">✏️</span>
+            <span id="drawBannerText">Drawing Zone: Click and drag on video to draw</span>
+            <button type="button" id="cancelDrawBtn" class="draw-cancel-btn">Cancel (ESC)</button>
+          </div>
+        </div>
+        
+        <!-- Analytics Zones & Tripwires Interactive Toolbar -->
+        <div class="analytics-toolbar">
+          <div class="analytics-toolbar-group">
+            <span class="toolbar-label"><span class="badge-dot zone-dot"></span> Restricted Zones (<span id="zonesCountLabel">1</span>):</span>
+            <button type="button" id="btnToggleZone" class="analytics-btn active" title="Enable or Disable All Restricted Zones">Zones: ON</button>
+            <button type="button" id="btnDrawZone" class="analytics-btn btn-action" title="Draw/Redraw Primary Zone">✏️ Edit Zone #1</button>
+            <button type="button" id="btnAddZone" class="analytics-btn btn-action" title="Draw an Additional Restricted Zone">➕ Add Zone</button>
+          </div>
+          <div class="analytics-toolbar-divider"></div>
+          <div class="analytics-toolbar-group">
+            <span class="toolbar-label"><span class="badge-dot tripwire-dot"></span> Virtual Tripwire:</span>
+            <button type="button" id="btnToggleTripwire" class="analytics-btn active" title="Enable or Disable Virtual Tripwire">Tripwire: ON</button>
+            <button type="button" id="btnDrawTripwire" class="analytics-btn btn-action" title="Draw Custom Tripwire Line with Mouse">📏 Draw Tripwire</button>
+          </div>
+          <div class="analytics-toolbar-divider"></div>
+          <button type="button" id="btnResetAnalytics" class="analytics-btn btn-reset" title="Reset Zone & Tripwire to Defaults">↺ Reset</button>
+          <div class="analytics-toolbar-divider" id="unblurDivider" style="display: none;"></div>
+          <button type="button" id="btnToolbarUnblurToggle" class="analytics-btn btn-toolbar-unblur" style="display: none;" title="Toggle Unblurred Video Feed (Authorized)">👁️ Clear Feed: OFF</button>
+        </div>
+
+        <div class="monitor-overlay-bar">
+          <span id="monitorInfo">STANDBY - PIPELINE OFF</span>
+          <span id="liveUnblurOverlayPill" style="display: none; color: #34D399; font-weight: 700; letter-spacing: 0.5px;">🔓 OPERATOR AUTHORIZED: UNBLURRED VIDEO STREAM</span>
+          <span>INTEL OPENVINO / DL STREAMER</span>
+        </div>
+      </section>
+
+      <!-- Active Configuration Summary Strip -->
+      <section class="config-summary-strip">
+        <div class="summary-item">
+          <span class="summary-label">Pipeline Status</span>
+          <span class="summary-val" id="summaryStatus">STOPPED</span>
+        </div>
+        <div class="summary-item">
+          <span class="summary-label">Input Source</span>
+          <span class="summary-val" id="summaryInput">FILE</span>
+        </div>
+        <div class="summary-item">
+          <span class="summary-label">Target Device</span>
+          <span class="summary-val" id="summaryDevice">GPU</span>
+        </div>
+        <div class="summary-item">
+          <span class="summary-label">Active Policy</span>
+          <span class="summary-val" id="summaryPolicy">STANDARD</span>
+        </div>
+      </section>
+
+      <!-- Activity Logs Section -->
+      <section class="dash-card">
+        <div class="dash-card-header">
+          <div class="dash-card-title">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
+            Activity Logs
+          </div>
+          <span style="font-size: 0.7rem; color: var(--text-muted); font-family: 'JetBrains Mono', monospace;">SYSTEM EVENTS</span>
+        </div>
+        <div class="dash-card-body" style="padding: 0.85rem;">
+          <div class="log-terminal" id="logTerminal">
+            <!-- Dynamic log messages streamed here -->
+          </div>
+        </div>
+      </section>
+
+      <!-- Dedicated Analytics Dashboards: Restricted Zone & Tripwire Flow Monitors (Stacked Horizontally) -->
+      <div class="analytics-dash-stack">
+        <!-- Red Card: Restricted Zone Security Monitor (Full Width) -->
+        <section class="dash-card analytics-card zone-card">
+          <div class="dash-card-header">
+            <div class="dash-card-title">
+              <span class="indicator-dot dot-red"></span>
+              Restricted Zone Security &amp; Intrusion Monitor
+            </div>
+            <div style="display: flex; align-items: center; gap: 0.5rem;">
+              <span class="status-badge" style="background: #1C1917; border: 1px solid #44403C; color: #D6D3D1;" id="zoneCountBadge">1 ZONE ACTIVE</span>
+              <span class="status-badge badge-zone" id="zoneStatusBadge">ARMED &bull; SECURE</span>
+            </div>
+          </div>
+          <div class="dash-card-body analytics-card-body">
+            <div class="alert-signal-box" id="zoneSignalBox">
+              <div class="signal-icon-wrap" id="zoneSignalIcon">
+                <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg>
+              </div>
+              <div class="signal-info">
+                <div class="signal-title" id="zoneSignalTitle">PERIMETER CLEAR</div>
+                <div class="signal-desc" id="zoneSignalDesc">No unauthorized intrusions detected in designated perimeter</div>
+              </div>
+            </div>
+
+            <!-- Key Real-Time Metrics Strip -->
+            <div class="analytics-metrics-row-4">
+              <div class="an-metric">
+                <span class="an-metric-label">Persons In Zone Now</span>
+                <span class="an-metric-val accent-green" id="zoneOccupantsVal">0</span>
+              </div>
+              <div class="an-metric">
+                <span class="an-metric-label">Total Intrusions Logged</span>
+                <span class="an-metric-val accent-red" id="zoneIntrusionsVal">0</span>
+              </div>
+              <div class="an-metric">
+                <span class="an-metric-label">Active Zones</span>
+                <span class="an-metric-val" id="zoneCountMetricVal">1 Zone</span>
+              </div>
+              <div class="an-metric">
+                <span class="an-metric-label">Latest Intrusion</span>
+                <span class="an-metric-val mono-font" id="zoneLastAlertVal">None</span>
+              </div>
+            </div>
+
+            <!-- Per-Zone Detailed Occupancy & Capacity Cards (Reference Venue Design) -->
+            <div class="zone-breakdown-section">
+              <div class="feed-header">
+                <span class="feed-title">PER-ZONE OCCUPANCY &amp; CAPACITY BREAKDOWN</span>
+                <span class="feed-sub">LIVE OCCUPANCY RATE &bull; CAPACITY &bull; DWELL TIME</span>
+              </div>
+              <div class="zones-cards-grid" id="zonesCardsGrid">
+                <!-- Dynamically rendered per active zone by dashboard.js -->
+              </div>
+            </div>
+
+            <!-- Real-Time Intrusion Activity Feed -->
+            <div class="event-feed-section">
+              <div class="feed-header">
+                <span class="feed-title">REAL-TIME INTRUSION INCIDENT LOG</span>
+                <span class="feed-sub">UPDATES EVERY 2-3 SECONDS &bull; TIME-STAMPED</span>
+              </div>
+              <div class="event-feed-list" id="zoneFeedList">
+                <div class="feed-empty">Perimeter secure. No active unauthorized entry logged.</div>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <!-- Blue/Cyan Card: Virtual Tripwire Flow Monitor (Full Width Below Red Box) -->
+        <section class="dash-card analytics-card tripwire-card">
+          <div class="dash-card-header">
+            <div class="dash-card-title">
+              <span class="indicator-dot dot-cyan"></span>
+              Virtual Tripwire Flow &amp; Bidirectional Occupancy
+            </div>
+            <span class="status-badge badge-tripwire" id="tripwireStatusBadge">ACTIVE &bull; COUNTING</span>
+          </div>
+          <div class="dash-card-body analytics-card-body">
+            <div class="alert-signal-box cyan-box" id="tripwireSignalBox">
+              <div class="signal-icon-wrap cyan-icon" id="tripwireSignalIcon">
+                <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="17 11 12 6 7 11"/><polyline points="17 18 12 13 7 18"/></svg>
+              </div>
+              <div class="signal-info">
+                <div class="signal-title" id="tripwireSignalTitle">FLOW NORMAL</div>
+                <div class="signal-desc" id="tripwireSignalDesc">Monitoring bidirectional boundary transitions</div>
+              </div>
+            </div>
+
+            <!-- Key Real-Time Metrics Strip -->
+            <div class="analytics-metrics-row-4">
+              <div class="an-metric">
+                <span class="an-metric-label">Net Occupancy</span>
+                <span class="an-metric-val accent-amber" id="twOccupancyVal">0</span>
+              </div>
+              <div class="an-metric">
+                <span class="an-metric-label">Total Entries (IN)</span>
+                <span class="an-metric-val accent-green" id="twEntriesVal">0</span>
+              </div>
+              <div class="an-metric">
+                <span class="an-metric-label">Total Exits (OUT)</span>
+                <span class="an-metric-val accent-cyan" id="twExitsVal">0</span>
+              </div>
+              <div class="an-metric">
+                <span class="an-metric-label">Latest Boundary Crossing</span>
+                <span class="an-metric-val mono-font" id="twLastCrossingVal">None</span>
+              </div>
+            </div>
+
+            <!-- Advanced Flow Dynamics & Directional Velocity -->
+            <div class="flow-dynamics-section">
+              <div class="feed-header">
+                <span class="feed-title">FLOW VELOCITY &amp; DIRECTIONAL DYNAMICS</span>
+                <span class="feed-sub">ROLLING 60s WINDOW &bull; INFLOW / OUTFLOW RATIO</span>
+              </div>
+              <div class="flow-dynamics-grid">
+                <div class="flow-dyn-card">
+                  <div class="flow-dyn-header">
+                    <span class="flow-dyn-label">Crossing Pace / Velocity</span>
+                    <span class="flow-dyn-badge badge-normal" id="twFlowVelocityBadge">NORMAL PACE</span>
+                  </div>
+                  <div class="flow-dyn-val" id="twFlowRateVal">0 <span class="flow-dyn-unit">crossings / min</span></div>
+                  <div class="flow-dyn-sub">Peak velocity observed: <strong id="twPeakVelocityVal" style="color: #F4F4F5;">0 / min</strong></div>
+                </div>
+
+                <div class="flow-dyn-card">
+                  <div class="flow-dyn-header">
+                    <span class="flow-dyn-label">Directional Flow Split</span>
+                    <span class="flow-dyn-badge text-cyan" id="twNetPaceVal">+0 / min</span>
+                  </div>
+                  <div class="flow-split-bar">
+                    <div class="split-fill split-in" id="twInflowBar" style="width: 50%" title="Inflow"></div>
+                    <div class="split-fill split-out" id="twOutflowBar" style="width: 50%" title="Outflow"></div>
+                  </div>
+                  <div class="flow-split-legend">
+                    <span class="legend-in">ENTRY (IN): <strong id="twInflowPctVal">50%</strong></span>
+                    <span class="legend-out">EXIT (OUT): <strong id="twOutflowPctVal">50%</strong></span>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <!-- Real-Time Crossing Event Feed -->
+            <div class="event-feed-section">
+              <div class="feed-header">
+                <span class="feed-title">REAL-TIME BOUNDARY TRANSITION LOG</span>
+                <span class="feed-sub">BIDIRECTIONAL CROSSING STREAM &bull; TIME-STAMPED</span>
+              </div>
+              <div class="event-feed-list" id="tripwireFeedList">
+                <div class="feed-empty">Flow normal. No recent boundary crossings logged.</div>
+              </div>
+            </div>
+          </div>
+        </section>
+      </div>
+      
+    </div>
+
+    <!-- Right Column: Control Parameters & Performance -->
+    <div class="right-col">
+      
+      <!-- Pipeline Execution Controls Card -->
+      <section class="dash-card">
+        <div class="dash-card-header">
+          <div class="dash-card-title">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
+            Pipeline Configuration
+          </div>
+        </div>
+
+        <div class="dash-card-body">
+          <!-- Input Source Control -->
+          <div class="control-group">
+            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 0.5rem;">
+              <label class="group-label" style="margin-bottom: 0;">Input Source</label>
+              <span class="active-file-indicator" id="activeFileIndicator" title="Active Video File">
+                <span class="file-dot"></span>
+                <span id="activeFileName">video.mp4</span>
+              </span>
+            </div>
+            <div class="segment-control">
+              <button class="segment-btn btn-source active" data-source="file">Video File</button>
+              <button class="segment-btn btn-source" data-source="webcam">Live Webcam</button>
+            </div>
+
+            <!-- Video File Upload & Selection Controls -->
+            <div class="video-file-manager">
+              <div class="video-upload-bar">
+                <button type="button" class="btn-upload" id="btnUploadTrigger">
+                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" x2="12" y1="3" y2="15"/></svg>
+                  Upload Custom Video
+                </button>
+                <input type="file" id="videoFileInput" accept="video/mp4,video/avi,video/quicktime,video/x-matroska,video/webm,.mp4,.avi,.mov,.mkv,.webm" style="display: none;">
+                <span class="upload-status-text" id="uploadStatusText">Supports MP4, AVI, MOV, MKV</span>
+              </div>
+              
+              <div class="upload-progress-bar" id="uploadProgressBar" style="display: none;">
+                <div class="upload-progress-fill" id="uploadProgressFill"></div>
+              </div>
+
+              <div class="video-selector-wrap" id="videoSelectorWrap" style="display: none;">
+                <select id="videoSelectDropdown" class="video-select-dropdown" title="Choose Video File">
+                  <option value="video.mp4">video.mp4 (Default Sample)</option>
+                </select>
+              </div>
+            </div>
+          </div>
+
+          <!-- Device Target Control -->
+          <div class="control-group">
+            <label class="group-label">Hardware Device</label>
+            <div class="segment-control">
+              <button class="segment-btn btn-device active" data-device="GPU">GPU (Intel Iris Xe)</button>
+              <button class="segment-btn btn-device" data-device="CPU">CPU (Intel Core)</button>
+            </div>
+          </div>
+
+          <!-- Bounding Boxes & Labels Overlay Control -->
+          <div class="control-group">
+            <label class="group-label">Face Bounding Boxes & Labels</label>
+            <div class="segment-control">
+              <button class="segment-btn btn-label active" data-labels="true">Show Labels</button>
+              <button class="segment-btn btn-label" data-labels="false">Hide Labels</button>
+            </div>
+          </div>
+
+          <!-- Privacy Policy Selection -->
+          <div class="control-group">
+            <label class="group-label">Privacy Policies</label>
+            <div class="policy-cards">
+              
+              <!-- STANDARD Policy -->
+              <div class="policy-option-card selected" data-policy="STANDARD">
+                <div class="policy-card-top">
+                  <span class="policy-card-name">STANDARD</span>
+                  <span class="policy-card-tag">Blur &bull; Pad 0%</span>
+                </div>
+                <p class="policy-card-desc">Standard privacy preservation with DL Streamer Gaussian blur.</p>
+              </div>
+
+              <!-- HIGH_PRIVACY Policy -->
+              <div class="policy-option-card" data-policy="HIGH_PRIVACY">
+                <div class="policy-card-top">
+                  <span class="policy-card-name">HIGH_PRIVACY</span>
+                  <span class="policy-card-tag">Strong Blur &bull; Pad 25%</span>
+                </div>
+                <p class="policy-card-desc">Expanded ROI padding for perimeter coverage around detected faces.</p>
+              </div>
+
+              <!-- ZERO_TRUST Policy -->
+              <div class="policy-option-card" data-policy="ZERO_TRUST">
+                <div class="policy-card-top">
+                  <span class="policy-card-name">ZERO_TRUST</span>
+                  <span class="policy-card-tag">Staged &bull; Encryption</span>
+                </div>
+                <p class="policy-card-desc">Cryptographic privacy protection staging (encryption module target).</p>
+                <span class="policy-status-notice">&bull; Staged in configuration (scheduled for future phase)</span>
+              </div>
+
+            </div>
+          </div>
+
+          <!-- Start / Stop Action Controls -->
+          <div class="action-controls">
+            <button class="btn-primary-action btn-start" id="btnStart">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><polygon points="5 3 19 12 5 21 5 3"/></svg>
+              Start Pipeline
+            </button>
+            <button class="btn-primary-action btn-stop" id="btnStop" disabled>
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><rect width="14" height="14" x="5" y="5" rx="2"/></svg>
+              Stop Pipeline
+            </button>
+          </div>
+        </div>
+      </section>
+
+      <!-- Performance Section (Clean metric cards with dedicated graph/stat accent colors) -->
+      <section class="dash-card">
+        <div class="dash-card-header">
+          <div class="dash-card-title">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/></svg>
+            Performance
+          </div>
+          <span style="font-size: 0.7rem; color: var(--text-muted); font-family: 'JetBrains Mono', monospace;">REAL-TIME METRICS</span>
+        </div>
+
+        <div class="dash-card-body">
+          <div class="metrics-grid">
+            
+            <div class="metric-card">
+              <span class="metric-title">Throughput</span>
+              <span class="metric-value cyan" id="valFps">--</span>
+            </div>
+
+            <div class="metric-card">
+              <span class="metric-title">Inference Latency</span>
+              <span class="metric-value green" id="valLatency">--</span>
+            </div>
+
+            <div class="metric-card">
+              <span class="metric-title">Frames Processed</span>
+              <span class="metric-value blue" id="valFrames">0</span>
+            </div>
+
+            <div class="metric-card">
+              <span class="metric-title">Faces Protected</span>
+              <span class="metric-value purple" id="valFaces">--</span>
+            </div>
+
+          </div>
+        </div>
+      </section>
+
+      <!-- Crowd Density and Scene Occupancy Widget (Stage B) -->
+      <section class="dash-card crowd-card">
+        <div class="dash-card-header">
+          <div class="dash-card-title">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>
+            Crowd Density &amp; Scene Occupancy
+          </div>
+          <span class="status-badge badge-crowd-tier" id="crowdDensityTierBadge">LOW DENSITY</span>
+        </div>
+        <div class="dash-card-body">
+          <div class="crowd-display-strip">
+            <div class="crowd-main-stat">
+              <span class="crowd-number" id="crowdHeadcountVal">0</span>
+              <span class="crowd-label">Persons In Scene</span>
+            </div>
+            <div class="crowd-meter-wrap">
+              <div class="crowd-meter-label-row">
+                <span>Scene Capacity Utilization</span>
+                <span id="crowdCapacityPctVal">0%</span>
+              </div>
+              <div class="crowd-progress-track">
+                <div class="crowd-progress-fill" id="crowdProgressFill" style="width: 0%;"></div>
+              </div>
+              <div class="crowd-meter-scale">
+                <span>0</span>
+                <span>Normal (5)</span>
+                <span>Threshold (15)</span>
+                <span>25+</span>
+              </div>
+            </div>
+          </div>
+          <div class="crowd-metrics-subgrid">
+            <div class="crowd-sub-metric">
+              <span class="csub-label">Density Tier</span>
+              <span class="csub-val" id="crowdLevelText">NORMAL</span>
+            </div>
+            <div class="crowd-sub-metric">
+              <span class="csub-label">Net Transition</span>
+              <span class="csub-val" id="crowdNetFlowVal">0 Occ</span>
+            </div>
+            <div class="crowd-sub-metric">
+              <span class="csub-label">Congestion Risk</span>
+              <span class="csub-val text-green" id="crowdRiskVal">SAFE</span>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- Privacy & Reversible Face-ROI Cryptography Card (Stage A & B) -->
+      <section class="dash-card crypto-panel-card">
+        <div class="dash-card-header">
+          <div class="dash-card-title">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect width="18" height="11" x="3" y="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>
+            Reversible Face-ROI Cryptography
+          </div>
+          <span class="status-badge badge-crypto" id="cryptoEngineBadge">AES-256-GCM READY</span>
+        </div>
+        <div class="dash-card-body">
+          <!-- Policy & Cryptographic Parameters Strip -->
+          <div class="crypto-meta-strip">
+            <div class="cm-item">
+              <span class="cm-lbl">Cipher Spec:</span>
+              <span class="cm-val mono-font">AES-256-GCM</span>
+            </div>
+            <div class="cm-item">
+              <span class="cm-lbl">Key Fingerprint:</span>
+              <span class="cm-val mono-font text-amber" id="cryptoKeyFp">SHA-256: Loading...</span>
+            </div>
+            <div class="cm-item">
+              <span class="cm-lbl">Key Storage:</span>
+              <span class="cm-val text-green">Secure File (.keys/)</span>
+            </div>
+            <div class="cm-item">
+              <span class="cm-lbl">Encrypted ROIs:</span>
+              <span class="cm-val mono-font text-purple" id="cryptoCountVal">0 Faces</span>
+            </div>
+          </div>
+
+          <div class="crypto-policy-banner" id="cryptoPolicyBanner">
+            <span class="cp-icon">🔒</span>
+            <div class="cp-text">
+              <div class="cp-title" id="cryptoPolicyTitle">Active Policy: STANDARD (Irreversible Blur)</div>
+              <div class="cp-desc" id="cryptoPolicyDesc">Standard Gaussian blur permanently destroys pixel entropy. Switch to <strong>ZERO_TRUST</strong> policy above to activate reversible AES-256-GCM face-ROI envelopes.</div>
+            </div>
+          </div>
+
+          <!-- Authorized Decryption Inspector Section -->
+          <div class="decryption-inspector">
+            <div class="feed-header" style="margin-top: 0.75rem; margin-bottom: 0.5rem;">
+              <span class="feed-title">AUTHORIZED DECRYPTION INSPECTOR</span>
+              <span class="feed-sub">AUTHENTICATED RESTORATION &bull; TAMPER PROOF</span>
+            </div>
+
+            <!-- Subject / Person Selector (Multi-Face Handling) -->
+            <div class="multi-face-selector-wrap">
+              <div class="multi-face-header">
+                <span class="mf-title">SELECT TARGET FACE / SUBJECT:</span>
+                <span class="multi-face-count-pill" id="multiFaceCountBadge">1 Subject in Buffer</span>
+              </div>
+              <div class="face-pills-row" id="facePillsRow">
+                <button type="button" class="face-pill active" data-roi="latest" data-track="latest">Latest Face</button>
+                <button type="button" class="face-pill" data-roi="all" data-track="all">👥 All Faces</button>
+              </div>
+              <select id="roiSelectorDropdown" class="inspector-dropdown" title="Select Encrypted ROI container">
+                <option value="latest" data-track="latest">Latest Captured Face-ROI Envelope</option>
+                <option value="all" data-track="all">👥 All Detected Faces</option>
+              </select>
+              <span class="inspector-guidance-tip">
+                💡 <strong>Selective Decryption &amp; Unblurring:</strong> Choose a subject above. Click <em>&ldquo;Decrypt &amp; Preview Face Image&rdquo;</em> to inspect the restored image snapshot. Click <em>&ldquo;Unblur Video for Selected Face&rdquo;</em> to view them unblurred in the live video stream while others remain masked.
+              </span>
+            </div>
+
+            <div class="inspector-controls-grid" style="margin-top: 0.65rem;">
+              <div class="inspector-field">
+                <label class="inspector-label">Operator 256-bit Key (Hex / 64 chars):</label>
+                <div class="key-input-row">
+                  <input type="password" id="operatorKeyInput" class="inspector-input" placeholder="Paste 64-char Hex Key or use Quick-Fill" autocomplete="off">
+                  <button type="button" class="btn-micro" id="btnToggleKeyVis" title="Show or Hide Key">👁️</button>
+                </div>
+              </div>
+            </div>
+
+            <div class="inspector-btn-row">
+              <button type="button" class="btn-inspector-action btn-session-key" id="btnUseSessionKey" title="Autofill Active Master Key from Server Session">🔑 Use Session Master Key</button>
+              <button type="button" class="btn-inspector-action btn-test-tamper" id="btnTestTamperKey" title="Test with an Invalid/Tampered Key to Demonstrate Safe Failure">⚠️ Test Tampered Key</button>
+            </div>
+
+            <div class="inspector-btn-row" style="margin-top: 0.5rem;">
+              <button type="button" class="btn-primary-action btn-decrypt" id="btnDecryptTrigger">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 2l-2 2m-1-1l-3 3m5 8v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/><polyline points="15 3 21 3 21 9"/></svg>
+                🔓 Decrypt &amp; Preview Face Image
+              </button>
+              <button type="button" class="btn-secondary-action btn-lock-session" id="btnLockCrypto">
+                🔒 Lock Session
+              </button>
+            </div>
+
+            <!-- Live Video Stream Unblurred View Toggle -->
+            <div class="stream-unblur-card" id="streamUnblurCard">
+              <div class="stream-unblur-header">
+                <div class="stream-unblur-title">
+                  <span class="indicator-dot dot-cyan"></span>
+                  Selective Live Video Unblurring
+                </div>
+                <span class="status-badge badge-unblur-status" id="streamUnblurBadge">LOCKED (KEY REQUIRED)</span>
+              </div>
+              <p class="stream-unblur-desc" id="streamUnblurDesc">
+                Verify master key above first. Then click the button below to stream the unblurred video feed live on the monitor.
+              </p>
+              <div class="stream-unblur-action-row">
+                <button type="button" class="btn-toggle-unblur" id="btnToggleUnblurStream" disabled>
+                  👁️ Unblur Video for Selected Face: OFF
+                </button>
+              </div>
+            </div>
+
+            <!-- Single Decryption Output Box -->
+            <div class="decryption-preview-box" id="decryptionPreviewBox" style="display: none;">
+              <div class="preview-badge-row">
+                <span class="preview-badge verified" id="previewAuthBadge">TAG VERIFIED: AES-GCM MAC VALID</span>
+                <span class="preview-tag-info" id="previewRoiMeta">ROI #----</span>
+              </div>
+              <div class="preview-content-row">
+                <div class="preview-image-wrap">
+                  <img id="decryptedFaceImg" class="decrypted-face-img" src="" alt="Restored Face ROI">
+                  <span class="preview-watermark">CONFIDENTIAL &bull; AUTHORIZED ONLY</span>
+                </div>
+                <div class="preview-meta-details">
+                  <div class="pm-row"><span>Subject Track:</span> <strong id="previewSubjectTrack">Person #1</strong></div>
+                  <div class="pm-row"><span>BBox Coordinates:</span> <strong id="previewBBox">[0, 0, 0, 0]</strong></div>
+                  <div class="pm-row"><span>Frame Index:</span> <strong id="previewFrameIdx">--</strong></div>
+                  <div class="pm-row"><span>Captured At:</span> <strong id="previewTime">--</strong></div>
+                  <div class="pm-row"><span>Integrity State:</span> <strong class="text-green">PASS (AEAD Tag Matched)</strong></div>
+                </div>
+              </div>
+            </div>
+
+            <!-- Security Rejection Message (Displayed when tag verification fails) -->
+            <div class="decryption-error-box" id="decryptionErrorBox" style="display: none;">
+              <div class="error-box-header">
+                <span class="error-icon">🛡️</span>
+                <strong>SECURITY REJECTION &bull; DECRYPTION BLOCKED</strong>
+              </div>
+              <p class="error-box-desc" id="decryptionErrorDesc">
+                Authentication tag mismatch or invalid cryptographic key. Plaintext is destroyed and no face data was exposed to unauthorized memory.
+              </p>
+            </div>
+
+          </div>
+        </div>
+      </section>
+
+    </div>
+  </div>
+
+  <!-- Minimal Dark Footer -->
+  <footer class="app-footer">
+    Privacy-Preserving Face Anonymization &bull; Intel Deep Learning Streamer (DL Streamer) &bull; Intel OpenVINO 2026.4
+  </footer>
+
+  <script src="/static/js/dashboard.js"></script>
+</body>
+</html>
