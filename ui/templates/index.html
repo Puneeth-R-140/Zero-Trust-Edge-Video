@@ -82,7 +82,7 @@
 
         <div class="monitor-overlay-bar">
           <span id="monitorInfo">STANDBY - PIPELINE OFF</span>
-          <span id="liveUnblurOverlayPill" style="display: none; color: #34D399; font-weight: 700; letter-spacing: 0.5px;">🔓 OPERATOR AUTHORIZED: UNBLURRED VIDEO STREAM</span>
+          <span id="liveUnblurOverlayPill" class="unblur-overlay-pill" style="display: none;">🔓 OPERATOR AUTHORIZED: UNBLURRED VIDEO STREAM</span>
           <span>INTEL OPENVINO / DL STREAMER</span>
         </div>
       </section>
@@ -125,6 +125,39 @@
 
       <!-- Dedicated Analytics Dashboards: Restricted Zone & Tripwire Flow Monitors (Stacked Horizontally) -->
       <div class="analytics-dash-stack">
+
+        <!-- Live Security Alerts & Encrypted Face Recovery Card (Stage C) -->
+        <section class="dash-card analytics-card alerts-feed-card" id="alertsFeedCard">
+          <div class="dash-card-header">
+            <div class="dash-card-title">
+              <span class="indicator-dot dot-red"></span>
+              Live Security Event Alerts &amp; Encrypted Face Recovery
+            </div>
+            <div style="display: flex; align-items: center; gap: 0.5rem;">
+              <span class="status-badge badge-neutral" id="alertsTotalBadge">0 ALERTS</span>
+              <span class="status-badge badge-crypto" id="alertsCryptoBadge">AES-256-GCM READY</span>
+            </div>
+          </div>
+          <div class="dash-card-body analytics-card-body">
+            <!-- Filter Tabs & Guidance -->
+            <div class="alerts-filter-strip">
+              <div class="alerts-tabs">
+                <button type="button" class="alert-tab-btn active" data-filter="all">All Alerts (<span id="allAlertsCount">0</span>)</button>
+                <button type="button" class="alert-tab-btn" data-filter="zone">🚨 Red Zone (<span id="zoneAlertsCount">0</span>)</button>
+                <button type="button" class="alert-tab-btn" data-filter="tripwire">🔹 Blue Tripwire (<span id="tripwireAlertsCount">0</span>)</button>
+              </div>
+              <div class="alerts-quick-help">
+                <span>🔒 Click <strong>"🔓 Decrypt Face"</strong> to authenticate and view restored face image</span>
+              </div>
+            </div>
+
+            <!-- Scrollable Rich Alerts Feed -->
+            <div class="live-alerts-list" id="liveAlertsContainer">
+              <div class="feed-empty">Monitoring edge camera stream... Waiting for zone entry or tripwire boundary events.</div>
+            </div>
+          </div>
+        </section>
+
         <!-- Red Card: Restricted Zone Security Monitor (Full Width) -->
         <section class="dash-card analytics-card zone-card">
           <div class="dash-card-header">
@@ -133,7 +166,7 @@
               Restricted Zone Security &amp; Intrusion Monitor
             </div>
             <div style="display: flex; align-items: center; gap: 0.5rem;">
-              <span class="status-badge" style="background: #1C1917; border: 1px solid #44403C; color: #D6D3D1;" id="zoneCountBadge">1 ZONE ACTIVE</span>
+              <span class="status-badge badge-neutral" id="zoneCountBadge">1 ZONE ACTIVE</span>
               <span class="status-badge badge-zone" id="zoneStatusBadge">ARMED &bull; SECURE</span>
             </div>
           </div>
@@ -245,7 +278,7 @@
                     <span class="flow-dyn-badge badge-normal" id="twFlowVelocityBadge">NORMAL PACE</span>
                   </div>
                   <div class="flow-dyn-val" id="twFlowRateVal">0 <span class="flow-dyn-unit">crossings / min</span></div>
-                  <div class="flow-dyn-sub">Peak velocity observed: <strong id="twPeakVelocityVal" style="color: #F4F4F5;">0 / min</strong></div>
+                  <div class="flow-dyn-sub">Peak velocity observed: <strong id="twPeakVelocityVal">0 / min</strong></div>
                 </div>
 
                 <div class="flow-dyn-card">
@@ -628,6 +661,77 @@
         </div>
       </section>
 
+    </div>
+  </div>
+
+  <!-- Modal: Event Face Authenticated Decryption Inspector (Stage C) -->
+  <div class="event-decrypt-modal-backdrop" id="eventDecryptModal" style="display: none;">
+    <div class="event-decrypt-modal">
+      <div class="modal-header">
+        <div class="modal-title">
+          <span class="indicator-dot dot-cyan"></span>
+          <span>Authenticated Event Face Recovery (AES-256-GCM)</span>
+        </div>
+        <button type="button" class="modal-close-btn" id="closeEventDecryptModalBtn">&times;</button>
+      </div>
+      <div class="modal-body">
+        <div class="modal-alert-summary" id="modalAlertSummary">
+          <div class="mas-title" id="masTitle">Face #14 entered Platform Edge Restricted Zone</div>
+          <div class="mas-meta" id="masMeta">Event ID: evt_-- &bull; Target: Platform Edge Restricted Zone</div>
+        </div>
+
+        <div class="modal-key-section">
+          <label class="modal-label">Authorized Operator Master Key (64-char Hex):</label>
+          <div class="key-input-row">
+            <input type="password" id="modalKeyInput" class="inspector-input" placeholder="Paste 64-char Hex Key or use Quick-Fill" autocomplete="off">
+            <button type="button" class="btn-micro" id="btnModalToggleKeyVis" title="Show or Hide Key">👁️</button>
+          </div>
+          <div class="modal-btn-row">
+            <button type="button" class="btn-inspector-action btn-session-key" id="btnModalUseSessionKey">🔑 Use Active Session Key</button>
+            <button type="button" class="btn-inspector-action btn-test-tamper" id="btnModalTestTamperKey">⚠️ Test Tampered Key</button>
+          </div>
+        </div>
+
+        <div class="modal-action-row">
+          <button type="button" class="btn-primary-action btn-decrypt" id="btnModalAuthenticateDecrypt">
+            🔓 Authenticate &amp; Decrypt Face Image
+          </button>
+        </div>
+
+        <!-- Result Preview -->
+        <div class="modal-result-box" id="modalResultBox" style="display: none;">
+          <div class="preview-badge-row">
+            <span class="preview-badge verified" id="modalAuthBadge">TAG VERIFIED: AES-GCM MAC VALID</span>
+            <span class="preview-tag-info" id="modalRoiMeta">ROI #----</span>
+          </div>
+          <div class="preview-content-row">
+            <div class="preview-image-wrap">
+              <img id="modalDecryptedFaceImg" class="decrypted-face-img" src="" alt="Restored Face ROI">
+              <span class="preview-watermark">CONFIDENTIAL &bull; AUTHORIZED ONLY</span>
+            </div>
+            <div class="preview-meta-details">
+              <div class="pm-row"><span>Subject:</span> <strong id="modalSubject">Face #--</strong></div>
+              <div class="pm-row"><span>Event ID:</span> <strong id="modalEventId">evt_--</strong></div>
+              <div class="pm-row"><span>Bounding Box:</span> <strong id="modalBBox">[--, --, --, --]</strong></div>
+              <div class="pm-row"><span>Frame Index:</span> <strong id="modalFrameIdx">--</strong></div>
+              <div class="pm-row"><span>Timestamp:</span> <strong id="modalTime">--</strong></div>
+              <div class="pm-row"><span>Cryptographic Proof:</span> <strong class="text-green">PASS (AES-256-GCM AEAD Tag)</strong></div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Failure Rejection Box -->
+        <div class="decryption-error-box" id="modalErrorBox" style="display: none;">
+          <div class="error-box-header">
+            <span class="error-icon">🛡️</span>
+            <strong>SECURITY REJECTION &bull; DECRYPTION BLOCKED</strong>
+          </div>
+          <p class="error-box-desc" id="modalErrorDesc">
+            Authentication tag mismatch or invalid cryptographic key. Plaintext is destroyed and no face data was exposed.
+          </p>
+        </div>
+
+      </div>
     </div>
   </div>
 

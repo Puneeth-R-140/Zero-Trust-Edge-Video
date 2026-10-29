@@ -7,6 +7,7 @@ bidirectional counting, and zero-knowledge JSON event emission.
 import os
 import json
 import time
+import uuid
 from typing import Dict, List, Tuple, Any, Optional
 
 import cv2
@@ -49,6 +50,9 @@ class AnalyticsEngine:
         # Track history & state machine for duplicate prevention
         self.track_states: Dict[int, Dict[str, Any]] = {}
         self.frame_number = 0
+
+        # State tracking for per-track, per-zone entry, 5s reminders, and re-entry
+        self.zone_track_alert_state: Dict[Tuple[str, int], Dict[str, Any]] = {}
 
         # Event emission storage
         self.emitted_events: List[Dict[str, Any]] = []
@@ -204,6 +208,7 @@ class AnalyticsEngine:
         self.crossing_history_timestamps.clear()
         self.peak_flow_rate = 0.0
         self.track_states.clear()
+        self.zone_track_alert_state.clear()
         self.save_config()
 
     def _load_config(self, config_path: Optional[str], config_dict: Optional[Dict[str, Any]]) -> Dict[str, Any]:
@@ -219,14 +224,14 @@ class AnalyticsEngine:
         # Clean defaults
         return {
             "crowd_monitoring": {
-                "enabled": true,
+                "enabled": True,
                 "thresholds": {"LOW": 2, "NORMAL": 5, "HIGH": 8},
                 "alert_cooldown_seconds": 5.0
             },
             "restricted_zones": [],
             "virtual_tripwires": [],
             "bidirectional_counting": {
-                "enabled": true,
+                "enabled": True,
                 "initial_occupancy": 0,
                 "crossing_debounce_frames": 10
             }
@@ -305,11 +310,24 @@ class AnalyticsEngine:
                 if not zone.get("enabled", True):
                     continue
                 zid = zone.get("zone_id", "unnamed_zone")
+                zname = zone.get("name", zid)
                 polygon = np.array(zone.get("polygon", []), dtype=np.int32)
                 if len(polygon) < 3:
                     continue
 
                 is_inside = cv2.pointPolygonTest(polygon, (cx, cy), False) >= 0
+
+                state_key = (zid, tid)
+                if state_key not in self.zone_track_alert_state:
+                    self.zone_track_alert_state[state_key] = {
+                        "inside": False,
+                        "first_entered_time": timestamp,
+                        "last_alert_time": 0.0,
+                        "frames_outside": 0,
+                        "reminder_count": 0,
+                        "reentry_count": 0
+                    }
+                z_alert = self.zone_track_alert_state[state_key]
 
                 if is_inside:
                     track_in_any_zone = True
@@ -317,62 +335,143 @@ class AnalyticsEngine:
                     curr_inside_zones.add(zid)
                     current_frame_zone_tracks.setdefault(zid, []).append(tid)
 
-                    # Track entry timestamp for dwell time and loitering
+                    z_alert["frames_outside"] = 0
+
                     if zid not in self.zone_entry_timestamps:
                         self.zone_entry_timestamps[zid] = {}
                     if tid not in self.zone_entry_timestamps[zid]:
                         self.zone_entry_timestamps[zid][tid] = timestamp
 
                     dwell_now = timestamp - self.zone_entry_timestamps[zid][tid]
-                    # Loitering detection (> 8.0s loitering in restricted perimeter)
-                    if dwell_now >= 8.0:
-                        if (timestamp - self.last_loitering_alert_time.get(zid, 0.0)) >= 6.0:
-                            self.last_loitering_alert_time[zid] = timestamp
-                            zname = zone.get("name", zid)
-                            loiter_ev = self._create_event(
-                                event_type="ZONE_LOITERING",
-                                timestamp=timestamp,
-                                zone_id=zid,
-                                extra={
-                                    "zone_name": zname,
-                                    "dwell_seconds": round(dwell_now, 1),
-                                    "occupancy": self.occupancy
-                                }
-                            )
-                            frame_events.append(loiter_ev)
-                            self.zone_event_history.append({
-                                "time": time.strftime("%H:%M:%S"),
-                                "zone_name": zname,
-                                "type": "LOITER",
-                                "message": f"Loiter warning: Subject lingering in {zname} ({round(dwell_now, 1)}s)"
-                            })
-                            if len(self.zone_event_history) > 15:
-                                self.zone_event_history.pop(0)
 
-                    # Check for entry transition (prevents duplicate intrusion alerts while staying inside)
-                    if zid not in tstate["inside_zones"]:
+                    # 1. Entry / Re-entry Alert Logic
+                    if not z_alert["inside"]:
+                        z_alert["inside"] = True
+                        z_alert["first_entered_time"] = timestamp
+                        z_alert["last_alert_time"] = timestamp
+                        z_alert["reminder_count"] = 0
+                        is_reentry = (z_alert["reentry_count"] > 0)
+                        z_alert["reentry_count"] += 1
+
                         self.total_intrusions += 1
-                        self.last_intrusion_time = time.strftime("%H:%M:%S")
-                        zname = zone.get("name", zid)
+                        self.last_intrusion_time = time.strftime("%H:%M:%S", time.localtime(timestamp))
+                        ev_type = "ZONE_INTRUSION" if not is_reentry else "ZONE_REENTRY"
+                        msg = f"Face #{tid} entered {zname}" if not is_reentry else f"Face #{tid} re-entered {zname}"
+
                         event = self._create_event(
-                            event_type=zone.get("alert_type", "ZONE_INTRUSION"),
+                            event_type=ev_type,
                             timestamp=timestamp,
                             zone_id=zid,
+                            track_id=tid,
                             extra={
                                 "zone_name": zname,
+                                "target_name": zname,
+                                "track_id": tid,
+                                "message": msg,
+                                "dwell_seconds": 0.0,
+                                "reminder_count": 0,
+                                "is_reentry": is_reentry,
                                 "crowd_count": self.current_crowd_count,
                                 "occupancy": self.occupancy
                             }
                         )
                         frame_events.append(event)
                         self.zone_event_history.append({
-                            "time": time.strftime("%H:%M:%S"),
+                            "time": time.strftime("%H:%M:%S", time.localtime(timestamp)),
                             "zone_name": zname,
-                            "type": "ENTRY",
-                            "message": f"Person entered {zname}"
+                            "track_id": tid,
+                            "type": "ENTRY" if not is_reentry else "REENTRY",
+                            "message": msg
                         })
-                        if len(self.zone_event_history) > 15:
+                        if len(self.zone_event_history) > 20:
                             self.zone_event_history.pop(0)
+
+                    # 2. Repeat-Alert Logic: If remaining inside, send reminder alert every 5.0 seconds
+                    elif (timestamp - z_alert["last_alert_time"]) >= 5.0:
+                        z_alert["last_alert_time"] = timestamp
+                        z_alert["reminder_count"] += 1
+                        rem_msg = f"Face #{tid} entered {zname} (5s reminder: lingering {round(dwell_now, 1)}s)"
+                        rem_ev = self._create_event(
+                            event_type="ZONE_REMINDER",
+                            timestamp=timestamp,
+                            zone_id=zid,
+                            track_id=tid,
+                            extra={
+                                "zone_name": zname,
+                                "target_name": zname,
+                                "track_id": tid,
+                                "message": rem_msg,
+                                "dwell_seconds": round(dwell_now, 1),
+                                "reminder_count": z_alert["reminder_count"],
+                                "crowd_count": self.current_crowd_count,
+                                "occupancy": self.occupancy
+                            }
+                        )
+                        frame_events.append(rem_ev)
+                        self.zone_event_history.append({
+                            "time": time.strftime("%H:%M:%S", time.localtime(timestamp)),
+                            "zone_name": zname,
+                            "track_id": tid,
+                            "type": "REMINDER",
+                            "message": rem_msg
+                        })
+                        if len(self.zone_event_history) > 20:
+                            self.zone_event_history.pop(0)
+
+                    # Also detect long loitering (>8.0s) for loitering telemetry
+                    if dwell_now >= 8.0:
+                        if (timestamp - self.last_loitering_alert_time.get(zid, 0.0)) >= 6.0:
+                            self.last_loitering_alert_time[zid] = timestamp
+                            loiter_ev = self._create_event(
+                                event_type="ZONE_LOITERING",
+                                timestamp=timestamp,
+                                zone_id=zid,
+                                track_id=tid,
+                                extra={
+                                    "zone_name": zname,
+                                    "target_name": zname,
+                                    "track_id": tid,
+                                    "message": f"Loiter warning: Face #{tid} lingering in {zname} ({round(dwell_now, 1)}s)",
+                                    "dwell_seconds": round(dwell_now, 1),
+                                    "occupancy": self.occupancy
+                                }
+                            )
+                            frame_events.append(loiter_ev)
+
+                else:
+                    # Track is currently outside this zone
+                    if z_alert["inside"]:
+                        z_alert["frames_outside"] += 1
+                        # De-bounce exit: require 3 consecutive frames outside to confirm exit
+                        if z_alert["frames_outside"] >= 3:
+                            z_alert["inside"] = False
+                            dwell_total = round(timestamp - z_alert["first_entered_time"], 1)
+                            exit_msg = f"Face #{tid} exited {zname} (dwell: {dwell_total}s)"
+                            exit_ev = self._create_event(
+                                event_type="ZONE_EXIT",
+                                timestamp=timestamp,
+                                zone_id=zid,
+                                track_id=tid,
+                                extra={
+                                    "zone_name": zname,
+                                    "target_name": zname,
+                                    "track_id": tid,
+                                    "message": exit_msg,
+                                    "dwell_seconds": dwell_total,
+                                    "crowd_count": self.current_crowd_count,
+                                    "occupancy": self.occupancy
+                                }
+                            )
+                            frame_events.append(exit_ev)
+                            self.zone_event_history.append({
+                                "time": time.strftime("%H:%M:%S", time.localtime(timestamp)),
+                                "zone_name": zname,
+                                "track_id": tid,
+                                "type": "EXIT",
+                                "message": exit_msg
+                            })
+                            if len(self.zone_event_history) > 20:
+                                self.zone_event_history.pop(0)
 
             if track_in_any_zone:
                 frame_zone_occupants += 1
@@ -404,7 +503,7 @@ class AnalyticsEngine:
                                 self.exits += 1
                                 self.occupancy = max(0, self.occupancy - 1)
 
-                            self.last_crossing_time = time.strftime("%H:%M:%S")
+                            self.last_crossing_time = time.strftime("%H:%M:%S", time.localtime(timestamp))
                             self.last_crossing_direction = direction_str
                             tstate["last_cross_frame"] = self.frame_number
                             tstate["last_cross_side"] = crossing_dir
@@ -413,13 +512,19 @@ class AnalyticsEngine:
                             # Record crossing history for flow velocity analytics
                             self.crossing_history_timestamps.append((timestamp, direction_str))
 
+                            cross_msg = f"Face #{tid} crossed {tw_name} [{direction_str}]"
                             event = self._create_event(
                                 event_type="TRIPWIRE_CROSSING",
                                 timestamp=timestamp,
                                 tripwire_id=tw_id,
+                                track_id=tid,
                                 extra={
                                     "direction": direction_str,
+                                    "crossing_dir": crossing_dir,
                                     "tripwire_name": tw_name,
+                                    "target_name": tw_name,
+                                    "track_id": tid,
+                                    "message": cross_msg,
                                     "entries": self.entries,
                                     "exits": self.exits,
                                     "occupancy": self.occupancy,
@@ -428,13 +533,52 @@ class AnalyticsEngine:
                             )
                             frame_events.append(event)
                             self.tripwire_event_history.append({
-                                "time": time.strftime("%H:%M:%S"),
+                                "time": time.strftime("%H:%M:%S", time.localtime(timestamp)),
                                 "tripwire_name": tw_name,
+                                "track_id": tid,
                                 "direction": direction_str,
-                                "message": f"{direction_str}: Crossed {tw_name} (Occupancy: {self.occupancy})"
+                                "message": cross_msg
                             })
-                            if len(self.tripwire_event_history) > 15:
+                            if len(self.tripwire_event_history) > 20:
                                 self.tripwire_event_history.pop(0)
+
+        # Also check tracks that completely vanished from the frame while inside a zone
+        for state_key, z_alert in list(self.zone_track_alert_state.items()):
+            zid, tid = state_key
+            if tid not in active_track_ids and z_alert["inside"]:
+                z_alert["frames_outside"] += 1
+                if z_alert["frames_outside"] >= 3:
+                    z_alert["inside"] = False
+                    dwell_total = round(timestamp - z_alert["first_entered_time"], 1)
+                    zone_match = next((z for z in self.restricted_zones if z.get("zone_id") == zid), None)
+                    zname = zone_match.get("name", zid) if zone_match else zid
+                    exit_msg = f"Face #{tid} exited {zname} (dwell: {dwell_total}s)"
+                    exit_ev = self._create_event(
+                        event_type="ZONE_EXIT",
+                        timestamp=timestamp,
+                        zone_id=zid,
+                        track_id=tid,
+                        extra={
+                            "zone_name": zname,
+                            "target_name": zname,
+                            "track_id": tid,
+                            "message": exit_msg,
+                            "dwell_seconds": dwell_total,
+                            "crowd_count": self.current_crowd_count,
+                            "occupancy": self.occupancy
+                        }
+                    )
+                    frame_events.append(exit_ev)
+                    self.zone_event_history.append({
+                        "time": time.strftime("%H:%M:%S", time.localtime(timestamp)),
+                        "zone_name": zname,
+                        "track_id": tid,
+                        "type": "EXIT",
+                        "message": exit_msg
+                    })
+                    if len(self.zone_event_history) > 20:
+                        self.zone_event_history.pop(0)
+
 
         self.current_zone_occupants = frame_zone_occupants
         self.zone_active_tracks = current_frame_zone_tracks
@@ -515,13 +659,22 @@ class AnalyticsEngine:
     def _create_event(self, event_type: str, timestamp: float,
                       zone_id: Optional[str] = None,
                       tripwire_id: Optional[str] = None,
+                      track_id: Optional[int] = None,
                       extra: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
         """
-        Constructs a privacy-safe JSON event schema without facial or biometric data.
+        Constructs a structured JSON event schema with unique event_id, track_id, and telemetry.
         """
+        event_id = f"evt_{int(timestamp * 1000)}_{uuid.uuid4().hex[:8]}"
+        iso_str = time.strftime("%Y-%m-%dT%H:%M:%S", time.gmtime(timestamp)) + f".{int((timestamp % 1) * 1000):03d}Z"
+        time_str = time.strftime("%H:%M:%S", time.localtime(timestamp))
+
         event = {
+            "event_id": event_id,
             "timestamp": round(timestamp, 3),
+            "timestamp_iso": iso_str,
+            "time_str": time_str,
             "event_type": event_type,
+            "track_id": track_id if track_id is not None else 0,
             "crowd_level": self.current_crowd_level,
             "crowd_count": self.current_crowd_count,
             "occupancy": self.occupancy,
@@ -530,11 +683,18 @@ class AnalyticsEngine:
         }
         if zone_id:
             event["zone_id"] = zone_id
+            event["target_id"] = zone_id
         if tripwire_id:
             event["tripwire_id"] = tripwire_id
+            event["target_id"] = tripwire_id
         if extra:
             event.update(extra)
 
+        self.emitted_events.append(event)
+        if len(self.emitted_events) > 100:
+            self.emitted_events.pop(0)
+
+        self._write_event_to_disk(event)
         return event
 
     def _write_event_to_disk(self, event: Dict[str, Any]) -> None:
@@ -574,6 +734,8 @@ class AnalyticsEngine:
         """Renders analytics visuals: restricted zones, tripwires, and live telemetry with high legibility."""
         if not show_zones:
             return frame
+
+        h, w = frame.shape[:2]
 
         # 1. Semi-transparent fills for zones
         overlay = frame.copy()

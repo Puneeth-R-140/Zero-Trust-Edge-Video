@@ -66,6 +66,14 @@ roi_encryptor = RoiEncryptor()
 recent_encrypted_rois: List[Dict[str, Any]] = []
 recent_crypto_lock = threading.Lock()
 
+# Event alerts and secure face recovery store (AES-256-GCM encrypted ROIs per event)
+event_encrypted_store: Dict[str, Dict[str, Any]] = {}
+pending_face_events: Dict[int, List[str]] = {}
+recent_event_alerts: List[Dict[str, Any]] = []
+track_face_cache: Dict[int, Dict[str, Any]] = {}
+alerts_lock = threading.Lock()
+event_crypto_lock = threading.Lock()
+
 # Global state and reentrant lock to eliminate any deadlock risk
 state_lock = threading.RLock()
 log_lock = threading.Lock()
@@ -300,6 +308,8 @@ def background_pipeline_worker():
         # Inference & Tracking
         t0 = time.time()
         active_tracks = []
+        clean_frame = frame.copy()  # Save pristine unredacted frame for lossless face ROI encryption
+
         try:
             if (frame_idx % interval == 1) or (interval <= 1):
                 results = model.predict(frame, conf=conf_thresh, verbose=False)
@@ -315,6 +325,22 @@ def background_pipeline_worker():
             active_tracks = tracker.get_current()
 
         latency = (time.time() - t0) * 1000.0
+
+        # Cache pristine unredacted face ROIs for active face tracks
+        for track in active_tracks:
+            bx1, by1, bx2, by2 = track["box"]
+            tid = track.get("id", 0)
+            fw = max(1, bx2 - bx1)
+            fh = max(1, by2 - by1)
+            fcrop = clean_frame[max(0, by1):min(h, by2), max(0, bx1):min(w, bx2)].copy()
+            if fcrop.size > 0:
+                with event_crypto_lock:
+                    track_face_cache[tid] = {
+                        "crop": fcrop,
+                        "bbox": [bx1, by1, fw, fh],
+                        "timestamp": time.time(),
+                        "frame_index": frame_idx
+                    }
 
         # Apply Privacy Anonymization
         for track in active_tracks:
@@ -440,20 +466,182 @@ def background_pipeline_worker():
                     else:
                         active_person_tracks = person_tracker.get_current()
                 
+                # Associate person tracks with corresponding face crops
+                if len(active_person_tracks) > 0 and len(active_tracks) > 0:
+                    for p in active_person_tracks:
+                        px1, py1, px2, py2 = p["box"]
+                        pid = p.get("id", 0)
+                        for f in active_tracks:
+                            fx1, fy1, fx2, fy2 = f["box"]
+                            fcx = (fx1 + fx2) // 2
+                            fcy = (fy1 + fy2) // 2
+                            if px1 <= fcx <= px2 and py1 <= fcy <= (py1 + int((py2 - py1) * 0.7)):
+                                fw = max(1, fx2 - fx1)
+                                fh = max(1, fy2 - fy1)
+                                fcrop = clean_frame[max(0, fy1):min(h, fy2), max(0, fx1):min(w, fx2)].copy()
+                                if fcrop.size > 0:
+                                    with event_crypto_lock:
+                                        track_face_cache[pid] = {
+                                            "crop": fcrop,
+                                            "bbox": [fx1, fy1, fw, fh],
+                                            "timestamp": now,
+                                            "frame_index": frame_idx
+                                        }
+                                break
+
                 # Combine person tracks or fallback to active face tracks if webcam close-up
                 tracks_to_feed = active_person_tracks if len(active_person_tracks) > 0 else active_tracks
                 an_events = analytics_engine.update(tracks_to_feed, timestamp=now)
+
+                # Process event alerts and attach AES-256-GCM encrypted face ROIs
                 for ev in an_events:
-                    if ev["event_type"] == "CROWD_CONGESTION":
+                    ev_type = ev.get("event_type", "")
+                    if ev_type in ("ZONE_INTRUSION", "ZONE_REMINDER", "ZONE_REENTRY", "ZONE_EXIT", "TRIPWIRE_CROSSING"):
+                        ev_id = ev.get("event_id")
+                        ev_tid = ev.get("track_id", 0)
+
+                        # Look up face crop for this track
+                        with event_crypto_lock:
+                            face_info = track_face_cache.get(ev_tid)
+                            # Fallback if only 1 face on screen
+                            if face_info is None and len(active_tracks) == 1:
+                                f = active_tracks[0]
+                                fx1, fy1, fx2, fy2 = f["box"]
+                                fw = max(1, fx2 - fx1)
+                                fh = max(1, fy2 - fy1)
+                                fcrop = clean_frame[max(0, fy1):min(h, fy2), max(0, fx1):min(w, fx2)].copy()
+                                if fcrop.size > 0:
+                                    face_info = {
+                                        "crop": fcrop,
+                                        "bbox": [fx1, fy1, fw, fh],
+                                        "timestamp": now,
+                                        "frame_index": frame_idx
+                                    }
+                                    track_face_cache[ev_tid] = face_info
+
+                        # Encrypt face ROI losslessly with AES-256-GCM
+                        if face_info is not None and face_info.get("crop") is not None and face_info["crop"].size > 0:
+                            try:
+                                success, enc_png = cv2.imencode(".png", face_info["crop"])
+                                if success:
+                                    roi_bytes = enc_png.tobytes()
+                                    nonce = os.urandom(12)  # 96-bit unique nonce
+                                    aad_dict = {
+                                        "event_id": ev_id,
+                                        "track_id": ev_tid,
+                                        "event_type": ev_type,
+                                        "target_name": ev.get("target_name", ev.get("zone_name", ev.get("tripwire_name", ""))),
+                                        "timestamp": ev.get("timestamp", now)
+                                    }
+                                    aad_bytes = json.dumps(aad_dict, sort_keys=True).encode("utf-8")
+                                    enc_data = roi_encryptor._aesgcm.encrypt(nonce, roi_bytes, aad_bytes)
+                                    ciphertext = enc_data[:-16]
+                                    auth_tag = enc_data[-16:]
+
+                                    enc_meta = {
+                                        "event_id": ev_id,
+                                        "roi_id": ev_id,
+                                        "track_id": ev_tid,
+                                        "event_type": ev_type,
+                                        "cipher": "AES-256-GCM",
+                                        "format_version": "1.0",
+                                        "nonce_b64": base64.b64encode(nonce).decode("ascii"),
+                                        "ciphertext_b64": base64.b64encode(ciphertext).decode("ascii"),
+                                        "tag_b64": base64.b64encode(auth_tag).decode("ascii"),
+                                        "aad": aad_dict,
+                                        "bbox": list(face_info["bbox"]),
+                                        "frame_index": frame_idx,
+                                        "timestamp_iso": ev.get("timestamp_iso", time.strftime("%Y-%m-%dT%H:%M:%SZ"))
+                                    }
+                                    with event_crypto_lock:
+                                        event_encrypted_store[ev_id] = enc_meta
+
+                                    ev["has_encrypted_face"] = True
+                                    ev["face_recovery_status"] = "ENCRYPTED"
+                                    ev["cipher"] = "AES-256-GCM"
+                            except Exception as ex:
+                                print(f"[UI Server] Event face encryption error: {ex}")
+                                ev["has_encrypted_face"] = False
+                                ev["face_recovery_status"] = "ENCRYPTION_FAILED"
+                        else:
+                            ev["has_encrypted_face"] = False
+                            ev["face_recovery_status"] = "NO_FACE_CAPTURED"
+                            with event_crypto_lock:
+                                pending_face_events.setdefault(ev_tid, []).append(ev_id)
+
+                        with alerts_lock:
+                            recent_event_alerts.insert(0, dict(ev))
+                            if len(recent_event_alerts) > 60:
+                                recent_event_alerts.pop()
+
+                        # Emit activity logs
+                        if ev_type in ("ZONE_INTRUSION", "ZONE_REENTRY"):
+                            enc_txt = "Encrypted Face Attached" if ev.get("has_encrypted_face") else "No Face Visible"
+                            add_log(f"ALERT: {ev['message']} ({enc_txt})", "WARN")
+                        elif ev_type == "ZONE_REMINDER":
+                            add_log(f"REMINDER: {ev['message']}", "WARN")
+                        elif ev_type == "TRIPWIRE_CROSSING":
+                            add_log(f"TRIPWIRE: {ev['message']}", "INFO")
+                        elif ev_type == "ZONE_EXIT":
+                            add_log(f"EXIT: {ev['message']}", "INFO")
+
+                    elif ev.get("event_type") == "CROWD_CONGESTION":
                         add_log(f"ALERT: High crowd congestion ({ev['crowd_count']} persons)!", "WARN")
-                    elif ev["event_type"] == "ZONE_INTRUSION":
-                        add_log(f"ALERT: Intrusion into {ev.get('zone_name', 'Restricted Zone')}!", "WARN")
-                    elif ev["event_type"] == "TRIPWIRE_CROSSING":
-                        add_log(f"Tripwire: {ev.get('direction', 'CROSSING')} (Occupancy: {ev.get('occupancy')})", "INFO")
+
+                # Fulfill pending face events if newly detected face is available
+                with event_crypto_lock:
+                    for p_tid, p_ids in list(pending_face_events.items()):
+                        if p_ids and p_tid in track_face_cache:
+                            f_info = track_face_cache[p_tid]
+                            if f_info.get("crop") is not None and f_info["crop"].size > 0:
+                                pending_copy = list(p_ids)
+                                pending_face_events[p_tid] = []
+                                for p_ev_id in pending_copy:
+                                    try:
+                                        success, enc_png = cv2.imencode(".png", f_info["crop"])
+                                        if success:
+                                            roi_bytes = enc_png.tobytes()
+                                            nonce = os.urandom(12)
+                                            aad_dict = {
+                                                "event_id": p_ev_id,
+                                                "track_id": p_tid,
+                                                "event_type": "RETROACTIVE_ATTACH",
+                                                "target_name": "Event Target",
+                                                "timestamp": now
+                                            }
+                                            aad_bytes = json.dumps(aad_dict, sort_keys=True).encode("utf-8")
+                                            enc_data = roi_encryptor._aesgcm.encrypt(nonce, roi_bytes, aad_bytes)
+                                            ciphertext = enc_data[:-16]
+                                            auth_tag = enc_data[-16:]
+                                            enc_meta = {
+                                                "event_id": p_ev_id,
+                                                "roi_id": p_ev_id,
+                                                "track_id": p_tid,
+                                                "event_type": "RETROACTIVE_ATTACH",
+                                                "cipher": "AES-256-GCM",
+                                                "nonce_b64": base64.b64encode(nonce).decode("ascii"),
+                                                "ciphertext_b64": base64.b64encode(ciphertext).decode("ascii"),
+                                                "tag_b64": base64.b64encode(auth_tag).decode("ascii"),
+                                                "aad": aad_dict,
+                                                "bbox": list(f_info["bbox"]),
+                                                "frame_index": frame_idx,
+                                                "timestamp_iso": time.strftime("%Y-%m-%dT%H:%M:%SZ")
+                                            }
+                                            event_encrypted_store[p_ev_id] = enc_meta
+                                            with alerts_lock:
+                                                for al in recent_event_alerts:
+                                                    if al.get("event_id") == p_ev_id:
+                                                        al["has_encrypted_face"] = True
+                                                        al["face_recovery_status"] = "ENCRYPTED"
+                                                        al["cipher"] = "AES-256-GCM"
+                                                        break
+                                    except Exception:
+                                        pass
 
                 analytics_engine.draw_overlay(frame)
             except Exception:
                 pass
+
 
         an_state = analytics_engine.get_summary_state() if analytics_engine else {}
 
@@ -542,7 +730,96 @@ def api_status():
             }
             for r in recent_encrypted_rois[-12:]
         ]
+    with alerts_lock:
+        data["live_alerts"] = list(recent_event_alerts)[:30]
     return jsonify(data)
+
+
+@app.route("/api/alerts", methods=["GET"])
+def api_alerts_list():
+    limit = int(request.args.get("limit", 40))
+    with alerts_lock:
+        alerts = list(recent_event_alerts)[:limit]
+    return jsonify({
+        "status": "ok",
+        "count": len(alerts),
+        "alerts": alerts
+    })
+
+
+@app.route("/api/alerts/decrypt", methods=["POST"])
+def api_alerts_decrypt():
+    data = request.get_json(force=True, silent=True) or {}
+    event_id = str(data.get("event_id", "")).strip()
+    provided_key_hex = str(data.get("key_hex", "")).strip()
+    use_master_key = bool(data.get("use_master_key", False))
+
+    if not event_id:
+        return jsonify({"status": "error", "message": "event_id is required"}), 400
+
+    with event_crypto_lock:
+        enc_meta = event_encrypted_store.get(event_id)
+
+    if not enc_meta:
+        return jsonify({
+            "status": "error",
+            "message": "No encrypted face ROI found for this event (face was not visible or not captured)."
+        }), 404
+
+    custom_key = None
+    if use_master_key:
+        custom_key = roi_encryptor._key
+    elif provided_key_hex:
+        try:
+            custom_key = bytes.fromhex(provided_key_hex)
+            if len(custom_key) != 32:
+                return jsonify({"status": "error", "message": "Invalid key length: Must be exactly 64 hex characters (256-bit AES key)."}), 400
+        except Exception:
+            return jsonify({"status": "error", "message": "Invalid hexadecimal format in provided key."}), 400
+    else:
+        return jsonify({"status": "error", "message": "Cryptographic key required. Provide a 64-char hex key or select 'Use Session Master Key'."}), 400
+
+    try:
+        from cryptography.hazmat.primitives.ciphers.aead import AESGCM
+        aesgcm = AESGCM(custom_key)
+        nonce = base64.b64decode(enc_meta["nonce_b64"])
+        ciphertext = base64.b64decode(enc_meta["ciphertext_b64"])
+        tag = base64.b64decode(enc_meta["tag_b64"])
+        encrypted_payload = ciphertext + tag
+        aad_bytes = json.dumps(enc_meta["aad"], sort_keys=True).encode("utf-8")
+
+        # Authenticate and decrypt
+        decrypted_bytes = aesgcm.decrypt(nonce, encrypted_payload, aad_bytes)
+
+        # Decode lossless PNG back to image array
+        nparr = np.frombuffer(decrypted_bytes, np.uint8)
+        restored_roi = cv2.imdecode(nparr, cv2.IMREAD_UNCHANGED)
+        if restored_roi is None:
+            raise DecryptionAuthError("Decrypted bytes could not be decoded as image.")
+
+        _, buf = cv2.imencode(".png", restored_roi)
+        decrypted_b64 = base64.b64encode(buf.tobytes()).decode("ascii")
+
+        add_log(f"Authorized Decryption: Restored Face Image for Alert {event_id[:16]} (Face #{enc_meta.get('track_id', 1)})", "INFO")
+        return jsonify({
+            "status": "ok",
+            "event_id": event_id,
+            "track_id": enc_meta.get("track_id", 1),
+            "event_type": enc_meta.get("event_type", ""),
+            "cipher": enc_meta.get("cipher", "AES-256-GCM"),
+            "tag_verified": True,
+            "message": f"Cryptographic AEAD authentication tag verified! Face image restored for Face #{enc_meta.get('track_id', 1)}.",
+            "decrypted_face_b64": f"data:image/png;base64,{decrypted_b64}",
+            "bbox": enc_meta.get("bbox", []),
+            "frame_index": enc_meta.get("frame_index", 0),
+            "timestamp": enc_meta.get("timestamp_iso", "")
+        })
+    except Exception as ex:
+        add_log(f"Alert face decryption rejected for {event_id[:16]}: Authentication tag verification failed ({ex})", "WARN")
+        return jsonify({
+            "status": "error",
+            "message": f"Authentication Tag Verification Failed: Invalid cryptographic key or tampered ciphertext. ({str(ex)})"
+        }), 403
 
 
 @app.route("/api/events/live", methods=["GET"])

@@ -81,12 +81,15 @@ class RoiEncryptor:
         if os.path.exists(target_path):
             try:
                 with open(target_path, "rb") as f:
-                    content = f.read().strip()
+                    content = f.read()
                 if len(content) == 32:
                     return content
-                # Try hex string in file
+                # Try hex string or whitespace-trimmed key
+                stripped = content.strip()
+                if len(stripped) == 32:
+                    return stripped
                 try:
-                    raw = bytes.fromhex(content.decode("utf-8"))
+                    raw = bytes.fromhex(stripped.decode("utf-8"))
                     if len(raw) == 32:
                         return raw
                 except Exception:

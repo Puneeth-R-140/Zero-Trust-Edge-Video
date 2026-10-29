@@ -87,9 +87,10 @@ function initDashboard() {
   // Initialize interactive drawing & analytics toggles
   initAnalyticsDrawingController();
 
-  // Initialize Stage B: Crowd Widget and Crypto Inspector
+  // Initialize Stage B & C: Crowd Widget, Crypto Inspector, Live Alerts
   initCrowdWidget();
   initCryptoInspector();
+  initAlertsAndEventRecovery();
 
   // Initial synchronization and recurring poll
   fetchStatus();
@@ -489,9 +490,10 @@ function updateUIState(state) {
     renderTripwireFeed(an.tripwire_history || []);
   }
 
-  // 3. Stage B: Update Crowd & Occupancy Widget and Cryptography Panel
+  // 3. Stage B & C: Update Crowd & Occupancy Widget, Cryptography Panel, and Live Alerts Feed
   updateCrowdWidget(state);
   updateCryptoPanel(state);
+  updateLiveAlertsFeed(state.live_alerts || []);
 }
 
 let lastLogCount = 0;
@@ -606,15 +608,15 @@ function updateTripwireDynamics(td) {
     if (rate >= 10) {
       twFlowVelocityBadge.innerText = "HIGH INFLUX";
       twFlowVelocityBadge.style.color = "#EF4444";
-      twFlowVelocityBadge.style.background = "rgba(239, 68, 68, 0.2)";
+      twFlowVelocityBadge.style.background = "rgba(239, 68, 68, 0.15)";
     } else if (rate >= 4) {
       twFlowVelocityBadge.innerText = "ACTIVE FLOW";
       twFlowVelocityBadge.style.color = "#F59E0B";
-      twFlowVelocityBadge.style.background = "rgba(245, 158, 11, 0.2)";
+      twFlowVelocityBadge.style.background = "rgba(245, 158, 11, 0.15)";
     } else {
       twFlowVelocityBadge.innerText = "NORMAL PACE";
-      twFlowVelocityBadge.style.color = "#38BDF8";
-      twFlowVelocityBadge.style.background = "rgba(56, 189, 248, 0.12)";
+      twFlowVelocityBadge.style.color = "#06B6D4";
+      twFlowVelocityBadge.style.background = "rgba(6, 182, 212, 0.12)";
     }
   }
 }
@@ -903,7 +905,7 @@ function initAnalyticsDrawingController() {
       ctx.strokeRect(rx, ry, rw, rh);
       ctx.setLineDash([]);
 
-      ctx.fillStyle = "#18181B";
+      ctx.fillStyle = "#111111";
       ctx.fillRect(rx, Math.max(0, ry - 24), 180, 22);
       ctx.fillStyle = "#EF4444";
       ctx.font = "bold 11px sans-serif";
@@ -912,14 +914,14 @@ function initAnalyticsDrawingController() {
         : `PRIMARY ZONE: ${Math.round(rw)}x${Math.round(rh)}px`;
       ctx.fillText(labelText, rx + 6, Math.max(14, ry - 8));
     } else if (activeDrawMode === "tripwire") {
-      ctx.strokeStyle = "#38BDF8";
+      ctx.strokeStyle = "#06B6D4";
       ctx.lineWidth = 3;
       ctx.beginPath();
       ctx.moveTo(drawStartX, drawStartY);
       ctx.lineTo(currX, currY);
       ctx.stroke();
 
-      ctx.fillStyle = "#38BDF8";
+      ctx.fillStyle = "#06B6D4";
       ctx.beginPath();
       ctx.arc(drawStartX, drawStartY, 5, 0, Math.PI * 2);
       ctx.fill();
@@ -927,9 +929,9 @@ function initAnalyticsDrawingController() {
       ctx.arc(currX, currY, 5, 0, Math.PI * 2);
       ctx.fill();
 
-      ctx.fillStyle = "#18181B";
+      ctx.fillStyle = "#111111";
       ctx.fillRect(drawStartX, Math.max(0, drawStartY - 24), 180, 22);
-      ctx.fillStyle = "#38BDF8";
+      ctx.fillStyle = "#06B6D4";
       ctx.font = "bold 11px sans-serif";
       ctx.fillText("TRIPWIRE (ENTRY / EXIT)", drawStartX + 6, Math.max(14, drawStartY - 8));
     }
@@ -1323,15 +1325,15 @@ function updateUnblurredStreamUI(isUnlocked, isUnblurred) {
     }
     if (desc) {
       desc.innerHTML = isUnblurred 
-        ? `<strong style='color:#34D399'>Video stream is currently unmasked for ${targetName}.</strong> Other faces remain securely masked.`
+        ? `<strong style='color:#10B981'>Video stream is currently unmasked for ${targetName}.</strong> Other faces remain securely masked.`
         : `Master Key validated! Click above or in toolbar to unblur <strong>${targetName}</strong> live on the video monitor.`;
     }
     if (btnToolbar) {
       btnToolbar.style.display = "inline-flex";
       btnToolbar.innerText = isUnblurred ? `👁️ Clear: ON (${targetName})` : "👁️ Clear Feed: OFF";
-      btnToolbar.style.background = isUnblurred ? "#059669" : "#1F2937";
-      btnToolbar.style.borderColor = isUnblurred ? "#10B981" : "#374151";
-      btnToolbar.style.color = isUnblurred ? "#FFFFFF" : "#9CA3AF";
+      btnToolbar.style.background = isUnblurred ? "#181818" : "#141414";
+      btnToolbar.style.borderColor = isUnblurred ? "#10B981" : "#292929";
+      btnToolbar.style.color = isUnblurred ? "#10B981" : "#A3A3A3";
     }
     if (divider) divider.style.display = "block";
     if (overlayPill) {
@@ -1465,6 +1467,293 @@ function lockCryptoSession() {
       }
       isUnblurredStreamActive = false;
       updateUnblurredStreamUI(false, false);
+    });
+}
+
+// -------------------------------------------------------------
+// Stage C: Live Security Alerts & Event Face Recovery Controller
+// -------------------------------------------------------------
+let cachedAlerts = [];
+let currentAlertFilter = "all";
+let activeModalEventId = null;
+
+function initAlertsAndEventRecovery() {
+  // Bind Alert Filter Tabs
+  document.querySelectorAll(".alert-tab-btn").forEach(btn => {
+    btn.addEventListener("click", () => {
+      document.querySelectorAll(".alert-tab-btn").forEach(b => b.classList.remove("active"));
+      btn.classList.add("active");
+      currentAlertFilter = btn.dataset.filter || "all";
+      renderLiveAlertsList();
+    });
+  });
+
+  // Modal Close buttons
+  const modal = document.getElementById("eventDecryptModal");
+  const closeBtn = document.getElementById("closeEventDecryptModalBtn");
+  if (closeBtn && modal) {
+    closeBtn.addEventListener("click", () => {
+      modal.style.display = "none";
+    });
+    modal.addEventListener("click", (e) => {
+      if (e.target === modal) modal.style.display = "none";
+    });
+  }
+
+  // Key Visibility Toggle
+  const btnToggleKeyVis = document.getElementById("btnModalToggleKeyVis");
+  const keyInput = document.getElementById("modalKeyInput");
+  if (btnToggleKeyVis && keyInput) {
+    btnToggleKeyVis.addEventListener("click", () => {
+      keyInput.type = keyInput.type === "password" ? "text" : "password";
+      btnToggleKeyVis.innerText = keyInput.type === "password" ? "👁️" : "🙈";
+    });
+  }
+
+  // Use Active Session Key
+  const btnUseSessionKey = document.getElementById("btnModalUseSessionKey");
+  if (btnUseSessionKey && keyInput) {
+    btnUseSessionKey.addEventListener("click", () => {
+      keyInput.value = "●●●● [SESSION MASTER KEY AUTHORIZED] ●●●●";
+      keyInput.dataset.useMaster = "true";
+      keyInput.style.borderColor = "#10B981";
+    });
+  }
+
+  // Test Tampered Key
+  const btnTestTamper = document.getElementById("btnModalTestTamperKey");
+  if (btnTestTamper && keyInput) {
+    btnTestTamper.addEventListener("click", () => {
+      keyInput.value = "deadbeefcafebabe0123456789abcdef0123456789abcdef0123456789abcdef";
+      keyInput.dataset.useMaster = "false";
+      keyInput.style.borderColor = "#EF4444";
+    });
+  }
+
+  // Authenticate & Decrypt button
+  const btnAuthDecrypt = document.getElementById("btnModalAuthenticateDecrypt");
+  if (btnAuthDecrypt) {
+    btnAuthDecrypt.addEventListener("click", performModalAlertDecryption);
+  }
+}
+
+function updateLiveAlertsFeed(alerts) {
+  if (!alerts) return;
+  cachedAlerts = alerts;
+
+  // Update counts
+  const allCount = alerts.length;
+  const zoneCount = alerts.filter(a => a.event_type && a.event_type.startsWith("ZONE")).length;
+  const twCount = alerts.filter(a => a.event_type === "TRIPWIRE_CROSSING").length;
+
+  const allAlertsCount = document.getElementById("allAlertsCount");
+  const zoneAlertsCount = document.getElementById("zoneAlertsCount");
+  const tripwireAlertsCount = document.getElementById("tripwireAlertsCount");
+  const alertsTotalBadge = document.getElementById("alertsTotalBadge");
+
+  if (allAlertsCount) allAlertsCount.innerText = allCount;
+  if (zoneAlertsCount) zoneAlertsCount.innerText = zoneCount;
+  if (tripwireAlertsCount) tripwireAlertsCount.innerText = twCount;
+  if (alertsTotalBadge) alertsTotalBadge.innerText = `${allCount} ALERT${allCount === 1 ? '' : 'S'}`;
+
+  renderLiveAlertsList();
+}
+
+function renderLiveAlertsList() {
+  const container = document.getElementById("liveAlertsContainer");
+  if (!container) return;
+
+  let filtered = cachedAlerts;
+  if (currentAlertFilter === "zone") {
+    filtered = cachedAlerts.filter(a => a.event_type && a.event_type.startsWith("ZONE"));
+  } else if (currentAlertFilter === "tripwire") {
+    filtered = cachedAlerts.filter(a => a.event_type === "TRIPWIRE_CROSSING");
+  }
+
+  if (!filtered || filtered.length === 0) {
+    container.innerHTML = '<div class="feed-empty">No security events match the current filter. Monitoring edge camera stream...</div>';
+    return;
+  }
+
+  container.innerHTML = filtered.map(item => {
+    const isZone = item.event_type && item.event_type.startsWith("ZONE");
+    const isReminder = item.event_type === "ZONE_REMINDER";
+    const isExit = item.event_type === "ZONE_EXIT";
+    const isTw = item.event_type === "TRIPWIRE_CROSSING";
+
+    let cardClass = "alert-item-card";
+    let badgeClass = "alert-type-badge";
+    let badgeText = item.event_type || "EVENT";
+
+    if (isReminder) {
+      cardClass += " zone-reminder";
+      badgeClass += " badge-amber-reminder";
+      badgeText = "⏱️ 5s REMINDER";
+    } else if (isExit) {
+      cardClass += " zone-exit";
+      badgeClass += " badge-gray-exit";
+      badgeText = "🚪 EXIT";
+    } else if (isZone) {
+      cardClass += " zone-intrusion";
+      badgeClass += " badge-red-zone";
+      badgeText = item.is_reentry ? "🚨 RE-ENTRY" : "🚨 RED ZONE";
+    } else if (isTw) {
+      cardClass += " tripwire-crossing";
+      badgeClass += " badge-cyan-wire";
+      badgeText = `🔹 TRIPWIRE ${item.direction || 'CROSS'}`;
+    }
+
+    const hasFace = Boolean(item.has_encrypted_face);
+    const cryptoStatusHtml = hasFace
+      ? '<span class="alert-crypto-status status-encrypted">🔒 AES-256-GCM</span>'
+      : '<span class="alert-crypto-status status-no-face">⚠️ NO FACE</span>';
+
+    const actionBtnHtml = hasFace
+      ? `<button type="button" class="btn-card-decrypt" data-event-id="${item.event_id}">🔓 Decrypt Face</button>`
+      : `<button type="button" class="btn-card-decrypt" style="opacity: 0.45; cursor: not-allowed;" title="Face was not visible during this event" disabled>No Face</button>`;
+
+    const timeStr = item.time_str || (item.timestamp_iso ? item.timestamp_iso.substring(11, 19) : "now");
+    const targetName = item.target_name || item.zone_name || item.tripwire_name || "Perimeter";
+
+    return `
+      <div class="${cardClass}" data-event-id="${item.event_id}">
+        <div class="alert-card-left">
+          <span class="${badgeClass}">${badgeText}</span>
+          <div class="alert-card-info">
+            <div class="alert-card-msg">${escapeHtml(item.message || "Security boundary event")}</div>
+            <div class="alert-card-meta">
+              <span class="track-pill">Face #${item.track_id || 1}</span>
+              <span>&bull;</span>
+              <span>Target: ${escapeHtml(targetName)}</span>
+              <span>&bull;</span>
+              <span>[${timeStr}]</span>
+              ${item.dwell_seconds ? `<span>&bull; Dwell: ${item.dwell_seconds}s</span>` : ''}
+            </div>
+          </div>
+        </div>
+        <div class="alert-card-right">
+          ${cryptoStatusHtml}
+          ${actionBtnHtml}
+        </div>
+      </div>
+    `;
+  }).join("");
+
+  // Attach click listeners to cards and decrypt buttons
+  container.querySelectorAll(".alert-item-card").forEach(card => {
+    card.addEventListener("click", (e) => {
+      const eventId = card.dataset.eventId;
+      if (eventId) {
+        openEventDecryptModal(eventId);
+      }
+    });
+  });
+
+  container.querySelectorAll(".btn-card-decrypt").forEach(btn => {
+    btn.addEventListener("click", (e) => {
+      e.stopPropagation();
+      const eventId = btn.dataset.eventId;
+      if (eventId) {
+        openEventDecryptModal(eventId);
+      }
+    });
+  });
+}
+
+function openEventDecryptModal(eventId) {
+  const item = cachedAlerts.find(a => a.event_id === eventId);
+  if (!item) return;
+
+  activeModalEventId = eventId;
+  const modal = document.getElementById("eventDecryptModal");
+  const masTitle = document.getElementById("masTitle");
+  const masMeta = document.getElementById("masMeta");
+  const keyInput = document.getElementById("modalKeyInput");
+  const resultBox = document.getElementById("modalResultBox");
+  const errorBox = document.getElementById("modalErrorBox");
+  const faceImg = document.getElementById("modalDecryptedFaceImg");
+
+  if (!modal) return;
+
+  if (masTitle) masTitle.innerText = item.message || `Alert Event #${eventId.substring(0, 12)}`;
+  if (masMeta) {
+    const targetName = item.target_name || item.zone_name || item.tripwire_name || "Perimeter";
+    masMeta.innerText = `Event ID: ${eventId} • Track: Face #${item.track_id || 1} • Target: ${targetName} • Time: ${item.time_str || 'now'}`;
+  }
+
+  if (keyInput) {
+    keyInput.value = "";
+    keyInput.dataset.useMaster = "false";
+    keyInput.style.borderColor = "";
+  }
+  if (resultBox) resultBox.style.display = "none";
+  if (errorBox) errorBox.style.display = "none";
+  if (faceImg) faceImg.src = "";
+
+  modal.style.display = "flex";
+}
+
+function performModalAlertDecryption() {
+  if (!activeModalEventId) return;
+
+  const keyInput = document.getElementById("modalKeyInput");
+  const resultBox = document.getElementById("modalResultBox");
+  const errorBox = document.getElementById("modalErrorBox");
+  const errorDesc = document.getElementById("modalErrorDesc");
+  const faceImg = document.getElementById("modalDecryptedFaceImg");
+
+  const useMaster = keyInput && keyInput.dataset.useMaster === "true";
+  const keyHex = keyInput ? keyInput.value.trim() : "";
+
+  const payload = {
+    event_id: activeModalEventId,
+    use_master_key: useMaster,
+    key_hex: useMaster ? "" : keyHex
+  };
+
+  fetch("/api/alerts/decrypt", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload)
+  })
+    .then(r => r.json().then(data => ({ status: r.status, ok: r.ok, data })))
+    .then(res => {
+      if (res.ok && res.data.status === "ok") {
+        if (errorBox) errorBox.style.display = "none";
+        if (resultBox) resultBox.style.display = "flex";
+
+        if (faceImg && res.data.decrypted_face_b64) {
+          faceImg.src = res.data.decrypted_face_b64;
+        }
+
+        const modalSubject = document.getElementById("modalSubject");
+        const modalEventId = document.getElementById("modalEventId");
+        const modalBBox = document.getElementById("modalBBox");
+        const modalFrameIdx = document.getElementById("modalFrameIdx");
+        const modalTime = document.getElementById("modalTime");
+        const modalRoiMeta = document.getElementById("modalRoiMeta");
+
+        if (modalSubject) modalSubject.innerText = `Face #${res.data.track_id || 1}`;
+        if (modalEventId) modalEventId.innerText = res.data.event_id;
+        if (modalBBox) modalBBox.innerText = res.data.bbox ? `[${res.data.bbox.join(", ")}]` : "[--]";
+        if (modalFrameIdx) modalFrameIdx.innerText = res.data.frame_index || "--";
+        if (modalTime) modalTime.innerText = res.data.timestamp ? res.data.timestamp.replace("T", " ").replace("Z", "") : "--";
+        if (modalRoiMeta) modalRoiMeta.innerText = `EVENT #${(res.data.event_id || "").substring(0, 16)}`;
+
+      } else {
+        if (faceImg) faceImg.src = "";
+        if (resultBox) resultBox.style.display = "none";
+        if (errorBox) errorBox.style.display = "block";
+        if (errorDesc) {
+          errorDesc.innerText = res.data.message || "Decryption authentication failed: Invalid cryptographic key or tampered ciphertext.";
+        }
+      }
+    })
+    .catch(err => {
+      if (faceImg) faceImg.src = "";
+      if (resultBox) resultBox.style.display = "none";
+      if (errorBox) errorBox.style.display = "block";
+      if (errorDesc) errorDesc.innerText = `Decryption request failed: ${err.message}`;
     });
 }
 
