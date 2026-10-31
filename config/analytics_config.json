@@ -31,7 +31,7 @@
         ]
       ],
       "alert_type": "ZONE_INTRUSION",
-      "enabled": false
+      "enabled": true
     },
     {
       "zone_id": "zone_restricted_2",
@@ -55,7 +55,7 @@
         ]
       ],
       "alert_type": "ZONE_INTRUSION",
-      "enabled": false
+      "enabled": true
     }
   ],
   "virtual_tripwires": [
