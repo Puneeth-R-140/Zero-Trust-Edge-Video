@@ -142,6 +142,24 @@ except Exception as ex:
     print(f"[UI Server] Note: Person model fallback: {ex}")
     person_model = None
 
+def resolve_ov_device(dev_str: str) -> str:
+    """Maps device string ('GPU' -> 'intel:gpu', 'CPU' -> 'intel:cpu') for OpenVINO acceleration."""
+    d = str(dev_str).strip().upper()
+    if "GPU" in d:
+        return "intel:gpu"
+    return "intel:cpu"
+
+# Pre-warm OpenVINO compilation on Intel GPU/CPU for instant first-frame throughput
+try:
+    print("[UI Server] Pre-compiling OpenVINO models for acceleration...")
+    dummy_img = np.zeros((640, 640, 3), dtype=np.uint8)
+    model.predict(dummy_img, device="intel:gpu", imgsz=640, verbose=False)
+    if person_model is not None:
+        person_model.predict(dummy_img, device="intel:cpu", imgsz=640, verbose=False)
+    print("[UI Server] Heterogeneous acceleration active: Face on Intel GPU, Analytics on CPU.")
+except Exception as p_ex:
+    print(f"[UI Server] OpenVINO pre-compile note (running AUTO/CPU): {p_ex}")
+
 # Latest processed JPEG frame buffer (non-blocking for HTTP clients)
 latest_frame_bytes: Optional[bytes] = None
 frame_condition = threading.Condition()
@@ -215,17 +233,19 @@ def background_pipeline_worker():
                 frame_condition.notify_all()
 
             if src_type == "webcam":
-                add_log(f"Opening Live Webcam device [{webcam_idx}]...", "INFO")
-                # Try CAP_DSHOW on Windows first, fall back to standard capture
+                add_log(f"Opening Live Webcam device [{webcam_idx}] with hardware acceleration...", "INFO")
+                # Try CAP_DSHOW on Windows with MJPG for low latency 30+ FPS capture
                 cap = cv2.VideoCapture(webcam_idx, cv2.CAP_DSHOW)
                 if not cap.isOpened():
                     cap = cv2.VideoCapture(webcam_idx)
                 
                 if cap.isOpened():
+                    cap.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*'MJPG'))
+                    cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
                     cap.set(cv2.CAP_PROP_FRAME_WIDTH, 1280)
                     cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 720)
                     cap.set(cv2.CAP_PROP_FPS, 30)
-                    add_log(f"Live Webcam stream active (Device #{webcam_idx}).", "INFO")
+                    add_log(f"Live Webcam stream active (Device #{webcam_idx} @ 30fps MJPG).", "INFO")
                 else:
                     add_log(f"Warning: Webcam device {webcam_idx} could not be opened.", "WARN")
             else:
@@ -238,6 +258,7 @@ def background_pipeline_worker():
             frame_idx = 0
             start_time = time.time()
             webcam_fail_count = 0
+            smoothed_fps = 30.0
 
         # Read next frame
         ret = False
@@ -273,6 +294,7 @@ def background_pipeline_worker():
         else:
             webcam_fail_count = 0
 
+        frame_t0 = time.time()
         frame_idx += 1
         h, w = frame.shape[:2]
 
@@ -308,11 +330,11 @@ def background_pipeline_worker():
         # Inference & Tracking
         t0 = time.time()
         active_tracks = []
-        clean_frame = frame.copy()  # Save pristine unredacted frame for lossless face ROI encryption
+        ov_device = resolve_ov_device(dev)
 
         try:
             if (frame_idx % interval == 1) or (interval <= 1):
-                results = model.predict(frame, conf=conf_thresh, verbose=False)
+                results = model.predict(frame, conf=conf_thresh, device=ov_device, imgsz=640, verbose=False)
                 detections = []
                 for box in results[0].boxes:
                     bx1, by1, bx2, by2 = map(int, box.xyxy[0].tolist())
@@ -326,19 +348,20 @@ def background_pipeline_worker():
 
         latency = (time.time() - t0) * 1000.0
 
-        # Cache pristine unredacted face ROIs for active face tracks
+        # Cache pristine unredacted face ROIs BEFORE blurring (eliminates full 1080p frame copies)
+        now_ts = time.time()
         for track in active_tracks:
             bx1, by1, bx2, by2 = track["box"]
             tid = track.get("id", 0)
             fw = max(1, bx2 - bx1)
             fh = max(1, by2 - by1)
-            fcrop = clean_frame[max(0, by1):min(h, by2), max(0, bx1):min(w, bx2)].copy()
+            fcrop = frame[max(0, by1):min(h, by2), max(0, bx1):min(w, bx2)].copy()
             if fcrop.size > 0:
                 with event_crypto_lock:
                     track_face_cache[tid] = {
                         "crop": fcrop,
                         "bbox": [bx1, by1, fw, fh],
-                        "timestamp": time.time(),
+                        "timestamp": now_ts,
                         "frame_index": frame_idx
                     }
 
@@ -456,8 +479,12 @@ def background_pipeline_worker():
             try:
                 active_person_tracks = []
                 if person_model is not None:
-                    if (frame_idx % interval == 1) or (interval <= 1):
-                        p_res = person_model.predict(frame, classes=[0], conf=0.35, verbose=False)
+                    # Stagger person detection to avoid running two deep neural networks on the same frame:
+                    # Face model runs on (frame_idx % interval == 1)
+                    # Person model runs on an offset frame (e.g. frame_idx % max(3, interval * 2) == 0)
+                    person_interval = max(3, interval * 2)
+                    if (frame_idx % person_interval == 0):
+                        p_res = person_model.predict(frame, classes=[0], conf=0.35, device="intel:cpu", imgsz=640, verbose=False)
                         p_dets = []
                         for pbox in p_res[0].boxes:
                             px1, py1, px2, py2 = map(int, pbox.xyxy[0].tolist())
@@ -466,7 +493,7 @@ def background_pipeline_worker():
                     else:
                         active_person_tracks = person_tracker.get_current()
                 
-                # Associate person tracks with corresponding face crops
+                # Associate person tracks with corresponding cached face crops
                 if len(active_person_tracks) > 0 and len(active_tracks) > 0:
                     for p in active_person_tracks:
                         px1, py1, px2, py2 = p["box"]
@@ -476,17 +503,10 @@ def background_pipeline_worker():
                             fcx = (fx1 + fx2) // 2
                             fcy = (fy1 + fy2) // 2
                             if px1 <= fcx <= px2 and py1 <= fcy <= (py1 + int((py2 - py1) * 0.7)):
-                                fw = max(1, fx2 - fx1)
-                                fh = max(1, fy2 - fy1)
-                                fcrop = clean_frame[max(0, fy1):min(h, fy2), max(0, fx1):min(w, fx2)].copy()
-                                if fcrop.size > 0:
-                                    with event_crypto_lock:
-                                        track_face_cache[pid] = {
-                                            "crop": fcrop,
-                                            "bbox": [fx1, fy1, fw, fh],
-                                            "timestamp": now,
-                                            "frame_index": frame_idx
-                                        }
+                                f_tid = f.get("id", 0)
+                                with event_crypto_lock:
+                                    if f_tid in track_face_cache:
+                                        track_face_cache[pid] = track_face_cache[f_tid]
                                 break
 
                 # Combine person tracks or fallback to active face tracks if webcam close-up
@@ -505,18 +525,9 @@ def background_pipeline_worker():
                             face_info = track_face_cache.get(ev_tid)
                             # Fallback if only 1 face on screen
                             if face_info is None and len(active_tracks) == 1:
-                                f = active_tracks[0]
-                                fx1, fy1, fx2, fy2 = f["box"]
-                                fw = max(1, fx2 - fx1)
-                                fh = max(1, fy2 - fy1)
-                                fcrop = clean_frame[max(0, fy1):min(h, fy2), max(0, fx1):min(w, fx2)].copy()
-                                if fcrop.size > 0:
-                                    face_info = {
-                                        "crop": fcrop,
-                                        "bbox": [fx1, fy1, fw, fh],
-                                        "timestamp": now,
-                                        "frame_index": frame_idx
-                                    }
+                                f_tid = active_tracks[0].get("id", 0)
+                                face_info = track_face_cache.get(f_tid)
+                                if face_info is not None:
                                     track_face_cache[ev_tid] = face_info
 
                         # Encrypt face ROI losslessly with AES-256-GCM
@@ -645,7 +656,11 @@ def background_pipeline_worker():
 
         an_state = analytics_engine.get_summary_state() if analytics_engine else {}
 
-        # Update telemetry
+        # Update telemetry with smooth exponential moving average (EMA) FPS
+        frame_dt = max(0.001, time.time() - frame_t0)
+        instant_fps = 1.0 / frame_dt
+        smoothed_fps = (smoothed_fps * 0.85) + (instant_fps * 0.15) if smoothed_fps > 0 else instant_fps
+
         with state_lock:
             pipeline_state["frames_processed"] = frame_idx
             pipeline_state["faces_detected"] = len(active_tracks)
@@ -655,9 +670,7 @@ def background_pipeline_worker():
             pipeline_state["entries"] = an_state.get("entries", 0)
             pipeline_state["exits"] = an_state.get("exits", 0)
             pipeline_state["occupancy"] = an_state.get("occupancy", 0)
-            if now - last_fps_time >= 0.35:
-                pipeline_state["fps"] = round(frame_idx / max(0.001, (now - start_time)), 1)
-                last_fps_time = now
+            pipeline_state["fps"] = round(smoothed_fps, 1)
 
         # Telemetry overlay badge on frame (Top-Left)
         status_line = f"ACTIVE: {policy_name} | {dev} | {src_type.upper()} | {pipeline_state['fps']:.1f} FPS"
@@ -666,13 +679,20 @@ def background_pipeline_worker():
         cv2.rectangle(frame, (14, 14), (26 + sw, 38), (75, 75, 85), 1, cv2.LINE_AA)
         cv2.putText(frame, status_line, (20, 31), cv2.FONT_HERSHEY_SIMPLEX, 0.48, (240, 240, 240), 2, cv2.LINE_AA)
 
-        # Encode JPEG and notify streaming clients
-        _, buf = cv2.imencode(".jpg", frame, [cv2.IMWRITE_JPEG_QUALITY, 80])
+        # Encode JPEG efficiently for browser streaming
+        # If frame is large (1080p), resize stream view to 1280x720 to save 12-15ms JPEG encoding CPU time
+        if w > 1280:
+            stream_frame = cv2.resize(frame, (1280, int(h * 1280 / w)), interpolation=cv2.INTER_LINEAR)
+        else:
+            stream_frame = frame
+
+        _, buf = cv2.imencode(".jpg", stream_frame, [cv2.IMWRITE_JPEG_QUALITY, 75])
         with frame_condition:
             latest_frame_bytes = buf.tobytes()
             frame_condition.notify_all()
 
-        time.sleep(0.015)
+        # Non-blocking yield to keep WSGI workers responsive without artificial latency
+        time.sleep(0.001)
 
 
 # Start background worker

@@ -14,24 +14,24 @@
       "name": "Platform Edge Restricted Zone",
       "polygon": [
         [
-          132,
-          737
+          966,
+          168
         ],
         [
-          322,
-          737
+          1175,
+          168
         ],
         [
-          322,
-          846
+          1175,
+          395
         ],
         [
-          132,
-          846
+          966,
+          395
         ]
       ],
       "alert_type": "ZONE_INTRUSION",
-      "enabled": true
+      "enabled": false
     },
     {
       "zone_id": "zone_restricted_2",
@@ -63,12 +63,12 @@
       "tripwire_id": "tripwire_gate_01",
       "name": "Main Concourse Tripwire",
       "p1": [
-        100,
-        380
+        117,
+        433
       ],
       "p2": [
-        1180,
-        380
+        346,
+        187
       ],
       "direction_labels": {
         "A_TO_B": "ENTRY",

@@ -270,6 +270,8 @@ def run_pipeline(
         except ValueError:
             cam_idx = 0
         cap = cv2.VideoCapture(cam_idx, cv2.CAP_DSHOW)
+        cap.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*'MJPG'))
+        cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
         cap.set(cv2.CAP_PROP_FRAME_WIDTH, webcam_width)
         cap.set(cv2.CAP_PROP_FRAME_HEIGHT, webcam_height)
         cap.set(cv2.CAP_PROP_FPS, webcam_fps)
@@ -324,9 +326,10 @@ def run_pipeline(
             now = time.time()
 
             # Inference interval: only run model every effective_interval frames
+            ov_dev = "intel:gpu" if str(device).upper() == "GPU" else "intel:cpu"
             if (frame_idx % effective_interval == 1) or (effective_interval <= 1):
-                # Run detection
-                results = model.predict(frame, conf=effective_threshold, verbose=False)
+                # Run detection with OpenVINO acceleration
+                results = model.predict(frame, conf=effective_threshold, device=ov_dev, imgsz=640, verbose=False)
                 detections = []
                 for box in results[0].boxes:
                     bx1, by1, bx2, by2 = map(int, box.xyxy[0].tolist())
@@ -366,8 +369,9 @@ def run_pipeline(
             if enable_analytics and analytics_engine is not None:
                 active_person_tracks = []
                 if person_model is not None:
-                    if (frame_idx % effective_interval == 1) or (effective_interval <= 1):
-                        p_results = person_model.predict(frame, classes=[0], conf=0.35, verbose=False)
+                    person_interval = max(3, effective_interval * 2)
+                    if (frame_idx % person_interval == 0):
+                        p_results = person_model.predict(frame, classes=[0], conf=0.35, device=ov_dev, imgsz=640, verbose=False)
                         p_detections = []
                         for pbox in p_results[0].boxes:
                             px1, py1, px2, py2 = map(int, pbox.xyxy[0].tolist())
